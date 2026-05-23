@@ -5,9 +5,9 @@
  *   default < project < environment variables
  */
 
-import { readFile, writeFile, access } from 'fs/promises';
+import { readFile, writeFile, access, mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
-import { resolve } from 'path';
+import { dirname, resolve } from 'path';
 import yaml from 'js-yaml';
 import { z } from 'zod';
 import type { ForgeConfig } from '../core/types.js';
@@ -159,7 +159,7 @@ gates:
     diff_max_lines: 500
     diff_max_files: 20
     deny_patterns:
-      - "console\\.log"
+      - 'console\\.log'
       - "debugger"
     protected_files:
       - ".env"
@@ -410,6 +410,7 @@ function applyEnvOverrides(config: Record<string, unknown>): Record<string, unkn
 async function ensureDefaultConfig(): Promise<void> {
   if (existsSync(DEFAULT_CONFIG_PATH)) return;
   try {
+    await mkdir(dirname(DEFAULT_CONFIG_PATH), { recursive: true });
     await writeFile(DEFAULT_CONFIG_PATH, DEFAULT_CONFIG_YAML, 'utf-8');
   } catch (err) {
     throw new ConfigError(

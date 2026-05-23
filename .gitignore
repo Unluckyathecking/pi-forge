@@ -26,5 +26,9 @@ Thumbs.db
 # Test coverage
 coverage/
 
-# Pi Forge runtime state
-.pi/
+# Generated default config
+config/default.yaml
+
+# Pi project settings are useful; runtime state is not.
+.pi/*
+!.pi/settings.json

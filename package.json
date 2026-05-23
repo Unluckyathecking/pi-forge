@@ -4,6 +4,11 @@
   "description": "Pi Forge — Proof-carrying, hexagonal-core, multi-level autonomous coding factory",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "pi": {
+    "extensions": [
+      "./extensions/pi-forge.ts"
+    ]
+  },
   "bin": {
     "pi-forge": "dist/cli/index.js"
   },
@@ -47,6 +52,8 @@
     "@typescript-eslint/eslint-plugin": "^7.8.0"
   },
   "keywords": [
+    "pi-package",
+    "pi-extension",
     "pi",
     "agent",
     "orchestration",

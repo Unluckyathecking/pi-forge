@@ -38,6 +38,38 @@ npm run dev -- forge "Add user authentication"
 npm run dev -- status
 ```
 
+## Interactive Pi/Kimi Workflow
+
+Pi Forge also ships as a project-local Pi package. When opened through Pi with
+`pi-kimi-coder`, Kimi is the interactive coding agent and Pi Forge provides
+planning, status, and verification tools.
+
+```bash
+# One-time setup if this repo has not been attached to Pi yet
+pi install -l .
+
+# Start interactive Pi with Kimi Code
+pi --provider kimi-coder --model kimi-for-coding
+```
+
+Inside Pi:
+
+```text
+/forge Add user authentication
+/forge-plan Add user authentication
+/forge-status
+```
+
+The extension registers these model-callable tools:
+
+- `pi_forge_plan` — run `pi-forge forge <goal> --dry-run --config config.yaml`
+- `pi_forge_run` — run the existing Pi Forge batch harness for a goal
+- `pi_forge_status` — inspect saved Pi Forge task graphs/evidence
+- `pi_forge_check` — run `npm run check`
+
+Current boundary: Pi/Kimi writes and edits code using Pi's normal tools; Pi
+Forge supplies the proof-carrying plan/check/evidence harness.
+
 ## Architecture
 
 Pi Forge uses a **hexagonal core** with swappable adapters:
@@ -92,6 +124,8 @@ pi-forge/
 │   │   ├── state.ts          # Filesystem state adapter
 │   │   ├── verifier.ts       # Local command verifier
 │   │   └── planner.ts        # Rule-based planner
+│   ├── extensions/
+│   │   └── pi-forge.ts       # Pi Coding Agent extension
 │   ├── utils/
 │   │   ├── config.ts         # Config loader
 │   │   ├── logger.ts         # Structured logger
