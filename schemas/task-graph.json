@@ -1,0 +1,130 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://pi-forge.dev/schemas/task-graph/v1.json",
+  "title": "Pi Forge Task Graph",
+  "description": "Directed acyclic graph of tasks for autonomous code production",
+  "type": "object",
+  "required": ["goal_id", "version", "tasks", "edges"],
+  "properties": {
+    "goal_id": {
+      "type": "string",
+      "description": "Unique identifier for the user goal",
+      "pattern": "^[a-z0-9-]+$"
+    },
+    "version": {
+      "type": "string",
+      "description": "Task graph schema version",
+      "const": "1.0.0"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "tasks": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/task" },
+      "minItems": 1
+    },
+    "edges": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/edge" }
+    },
+    "constraints": {
+      "type": "object",
+      "properties": {
+        "max_depth": { "type": "integer", "minimum": 1, "maximum": 10, "default": 4 },
+        "time_budget_minutes": { "type": "integer", "minimum": 1 },
+        "token_budget": { "type": "integer", "minimum": 1 },
+        "approval_mode": {
+          "type": "string",
+          "enum": ["auto", "confirm", "review"],
+          "default": "confirm"
+        }
+      }
+    }
+  },
+  "definitions": {
+    "task": {
+      "type": "object",
+      "required": ["id", "level", "title", "status"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9-_]+$",
+          "description": "Task identifier, unique within graph"
+        },
+        "level": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3,
+          "description": "L0=project, L1=module, L2=function, L3=line"
+        },
+        "title": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "blocked", "running", "completed", "failed", "cancelled"]
+        },
+        "owner": {
+          "type": "string",
+          "description": "Assigned agent role or capability"
+        },
+        "worktree": {
+          "type": "string",
+          "description": "Git worktree path for isolated execution"
+        },
+        "branch": {
+          "type": "string",
+          "description": "Git branch name"
+        },
+        "proof_requirements": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/proof_requirement" }
+        },
+        "input_contracts": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Paths to frozen input contracts"
+        },
+        "output_contracts": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Paths to output contracts to produce"
+        },
+        "estimated_minutes": { "type": "integer", "minimum": 1 },
+        "started_at": { "type": "string", "format": "date-time" },
+        "completed_at": { "type": "string", "format": "date-time" },
+        "evidence_id": {
+          "type": "string",
+          "description": "Reference to evidence ledger entry"
+        }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "required": ["from", "to", "type"],
+      "properties": {
+        "from": { "type": "string", "description": "Source task id" },
+        "to": { "type": "string", "description": "Target task id" },
+        "type": {
+          "type": "string",
+          "enum": ["depends_on", "produces_for", "conflicts_with"]
+        }
+      }
+    },
+    "proof_requirement": {
+      "type": "object",
+      "required": ["gate", "required"],
+      "properties": {
+        "gate": {
+          "type": "string",
+          "enum": ["lint", "typecheck", "test", "build", "security_scan", "contract_verify", "diff_size"]
+        },
+        "required": { "type": "boolean", "default": true },
+        "command": { "type": "string" },
+        "expected_exit_code": { "type": "integer", "default": 0 },
+        "artifact_pattern": { "type": "string" }
+      }
+    }
+  }
+}

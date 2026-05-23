@@ -1,0 +1,53 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://pi-forge.dev/schemas/evidence-ledger/v1.json",
+  "title": "Pi Forge Evidence Ledger",
+  "description": "Durable log of all actions, decisions, and outcomes for a goal",
+  "type": "object",
+  "required": ["goal_id", "version", "entries"],
+  "properties": {
+    "goal_id": { "type": "string" },
+    "version": { "type": "string", "const": "1.0.0" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "closed_at": { "type": "string", "format": "date-time" },
+    "entries": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/entry" }
+    },
+    "summary": {
+      "type": "object",
+      "properties": {
+        "total_entries": { "type": "integer" },
+        "tasks_completed": { "type": "integer" },
+        "tasks_failed": { "type": "integer" },
+        "total_duration_seconds": { "type": "integer" },
+        "final_status": {
+          "type": "string",
+          "enum": ["success", "partial", "failure", "cancelled"]
+        }
+      }
+    }
+  },
+  "definitions": {
+    "entry": {
+      "type": "object",
+      "required": ["seq", "timestamp", "type"],
+      "properties": {
+        "seq": { "type": "integer", "minimum": 0 },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "type": {
+          "type": "string",
+          "enum": ["goal_intake", "plan_created", "task_started", "task_completed", "task_failed", "gate_passed", "gate_failed", "merge", "rollback", "decision", "checkpoint", "escalation"]
+        },
+        "task_id": { "type": "string" },
+        "agent_role": { "type": "string" },
+        "description": { "type": "string" },
+        "data": { "type": "object" },
+        "artifact_refs": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}

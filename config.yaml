@@ -1,0 +1,386 @@
+# Pi Forge Harness Configuration v1.0.0
+# Production-grade autonomous coding harness
+
+forge:
+  version: "1.0.0"
+  name: "pi-forge"
+  description: "Proof-carrying, hexagonal-core, multi-level autonomous coding factory"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CORE ORCHESTRATION
+# ──────────────────────────────────────────────────────────────────────────────
+
+core:
+  # Hexagonal architecture: core never depends directly on tools, models, or git
+  architecture: "hexagonal"
+  
+  # Multi-level abstraction ladder
+  levels:
+    l0_project:
+      scope: "Project/repo scaffolding"
+      max_lines: 10000
+      agent_pool: 2
+    l1_module:
+      scope: "Module/component generation"
+      max_lines: 2000
+      agent_pool: 3
+    l2_function:
+      scope: "Function/class implementation"
+      max_lines: 300
+      agent_pool: 2
+    l3_line:
+      scope: "Line-level refactoring"
+      max_lines: 50
+      agent_pool: 1
+
+  # Escalation rules
+  escalation:
+    auto_escalate: true
+    human_pause_on:
+      - "public_api_change"
+      - "schema_migration"
+      - "auth_change"
+      - "deployment_topology_change"
+      - "security_posture_change"
+      - "data_deletion"
+      - "dependency_major_upgrade"
+    max_escalation_depth: 3
+
+# ──────────────────────────────────────────────────────────────────────────────
+# PROOF-CARRYING PIPELINE (MVP Spine)
+# ──────────────────────────────────────────────────────────────────────────────
+
+proof_carrying:
+  enabled: true
+  # Gates that must pass before a task can be marked complete
+  required_gates:
+    - lint
+    - typecheck
+    - test
+    - build
+    - security_scan
+  
+  # Gates that are checked but don't block
+  advisory_gates:
+    - contract_verify
+    - diff_review
+  
+  # Proof artifact settings
+  artifact:
+    schema: "./schemas/proof-artifact.json"
+    required_claims_min: 3
+    max_output_excerpt_length: 2000
+    persist_path: ".pi/evidence/{goal_id}/proofs/"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# GIT INTEGRATION
+# ──────────────────────────────────────────────────────────────────────────────
+
+git:
+  # Branch naming
+  branch_prefix: "pi/"
+  session_branch_template: "pi/session/{date}-{goal_slug}"
+  task_branch_template: "pi/task/{task_id}-{slug}"
+  
+  # Worktree isolation
+  worktree_base: ".pi/worktrees/"
+  auto_clean_worktrees: true
+  retain_failed_branches: true
+  archive_after_days: 7
+  
+  # Commit policy
+  commit:
+    require_conventional_commits: true
+    include_task_id: true
+    include_evidence_summary: true
+    max_commit_size_lines: 500
+  
+  # Merge policy
+  merge:
+    strategy: "rebase"
+    require_linear_history: true
+    squash_on_merge: false
+
+# ──────────────────────────────────────────────────────────────────────────────
+# AGENT ROLES & CAPABILITIES
+# ──────────────────────────────────────────────────────────────────────────────
+
+agents:
+  # Baseline roles with capability tags
+  roles:
+    coordinator:
+      description: "Orchestrates decomposition, delegation, and integration"
+      capabilities:
+        - "plan.decompose"
+        - "plan.delegate"
+        - "plan.integrate"
+        - "git.worktree"
+        - "git.branch"
+        - "git.merge"
+      max_concurrent_tasks: 8
+      
+    planner:
+      description: "Decomposes goals into task graphs with proof requirements"
+      capabilities:
+        - "plan.decompose"
+        - "plan.estimate"
+        - "contract.draft"
+        - "analysis.impact"
+      max_concurrent_tasks: 2
+      
+    coder:
+      description: "Implements scoped tasks in isolated worktrees"
+      capabilities:
+        - "code.implement"
+        - "code.test"
+        - "code.refactor"
+        - "code.document"
+        - "tool.lint"
+        - "tool.typecheck"
+      max_concurrent_tasks: 4
+      
+    reviewer:
+      description: "Adversarial review of design, edge cases, and maintainability"
+      capabilities:
+        - "review.design"
+        - "review.security"
+        - "review.performance"
+        - "review.accessibility"
+      max_concurrent_tasks: 2
+      
+    qa:
+      description: "Writes and runs tests, reproduces bugs"
+      capabilities:
+        - "test.unit"
+        - "test.integration"
+        - "test.e2e"
+        - "test.reproduce"
+      max_concurrent_tasks: 3
+      
+    security:
+      description: "Checks secrets, trust boundaries, injection paths"
+      capabilities:
+        - "security.secrets"
+        - "security.injection"
+        - "security.dependencies"
+        - "security.threat_model"
+      max_concurrent_tasks: 2
+      
+    integrator:
+      description: "Merges workstreams and resolves conflicts"
+      capabilities:
+        - "git.merge"
+        - "git.conflict_resolve"
+        - "test.integration"
+        - "verify.cross_module"
+      max_concurrent_tasks: 2
+
+  # Capability-based routing overrides role-based when enabled
+  capability_routing:
+    enabled: false  # Enable in v2
+    registry_path: ".pi/capabilities/"
+    fallback_role: "coder"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# QUALITY GATES
+# ──────────────────────────────────────────────────────────────────────────────
+
+gates:
+  # Mechanical gates run before any agent review
+  mechanical:
+    order:
+      - lint
+      - typecheck
+      - test
+      - build
+      - security_scan
+    
+    lint:
+      enabled: true
+      fail_on_error: true
+      auto_fix: false
+    
+    typecheck:
+      enabled: true
+      fail_on_error: true
+    
+    test:
+      enabled: true
+      require_pass: true
+      timeout_seconds: 300
+      coverage_threshold: 80  # Percent
+    
+    build:
+      enabled: true
+      fail_on_error: true
+      timeout_seconds: 300
+    
+    security_scan:
+      enabled: true
+      checks:
+        - secrets
+        - dependency_vulnerabilities
+        - injection_patterns
+        - suspicious_network
+      fail_on_critical: true
+
+  # Review gates run after mechanical gates pass
+  review:
+    diff_max_lines: 1000
+    diff_max_files: 50
+    deny_patterns:
+      - "password\s*="
+      - "api[_-]?key\s*="
+      - "secret\s*="
+      - "eval\s*\("
+      - "innerHTML\s*="
+      - "document\.write"
+      - "os\.system\s*\("
+      - "subprocess\.call.*shell=True"
+      - "child_process\.exec\s*\("
+    protected_files:
+      - ".env"
+      - ".env.*"
+      - "id_rsa*"
+      - ".ssh/**"
+      - ".aws/**"
+      - ".kube/**"
+      - "/etc/**"
+
+  # Risk scoring
+  risk:
+    weights:
+      policy_violations: 0.30
+      suspicious_patterns: 0.25
+      test_failures: 0.20
+      contract_drift: 0.15
+      diff_size_anomaly: 0.10
+    
+    thresholds:
+      auto_promote: 25
+      user_confirm: 50
+      security_review: 75
+      auto_deny: 90
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ARCHITECTURE VARIANTS (Pluggable Modules)
+# ──────────────────────────────────────────────────────────────────────────────
+
+variants:
+  # Variant 1: Proof-Carrying Code (always enabled - MVP spine)
+  proof_carrying:
+    enabled: true
+    priority: 1
+
+  # Variant 2: Speculative Execution
+  speculative_execution:
+    enabled: false
+    priority: 2
+    config:
+      max_strategies: 3
+      early_kill_threshold: 0.3
+      winner_threshold: 0.85
+      signal_check_interval_seconds: 60
+
+  # Variant 3: Capability-Based Routing
+  capability_based:
+    enabled: false
+    priority: 3
+
+  # Variant 4: Competitive Co-Evolution
+  competitive_coevolution:
+    enabled: false
+    priority: 4
+    config:
+      adversary_pairs:
+        - ["coder", "reviewer"]
+        - ["feature_builder", "test_breaker"]
+      opt_in_only: true
+
+  # Variant 5: Self-Modifying Harness
+  self_modifying:
+    enabled: false
+    priority: 5
+    config:
+      mutation_types:
+        - prompt_tweak
+        - routing_rule
+        - skill_addition
+        - threshold_shift
+      auto_promote_risk_levels: ["low"]
+      human_approval_risk_levels: ["medium", "high"]
+
+  # Variant 6: Constraint-Satisfaction
+  constraint_satisfaction:
+    enabled: false
+    priority: 6
+    config:
+      max_constraints: 20
+      solver_timeout_seconds: 120
+
+# ──────────────────────────────────────────────────────────────────────────────
+# STATE & RECOVERY
+# ──────────────────────────────────────────────────────────────────────────────
+
+state:
+  # Durable state paths
+  paths:
+    task_graphs: ".pi/state/task-graphs/"
+    evidence_ledgers: ".pi/state/evidence/"
+    checkpoints: ".pi/state/checkpoints/"
+    decision_logs: ".pi/state/decisions/"
+    memory_index: ".pi/state/memory/"
+  
+  # Checkpoint policy
+  checkpoints:
+    auto_write_before:
+      - "subagent_spawn"
+      - "long_running_task"
+      - "destructive_operation"
+    max_checkpoints_per_goal: 50
+    compress_after_days: 30
+
+# ──────────────────────────────────────────────────────────────────────────────
+# TELEMETRY & OBSERVABILITY
+# ──────────────────────────────────────────────────────────────────────────────
+
+telemetry:
+  enabled: true
+  level: "summary"  # full | summary | none
+  events:
+    - task_lifecycle
+    - gate_results
+    - agent_actions
+    - tool_calls
+    - merge_events
+    - rollback_events
+  
+  metrics:
+    - task_duration
+    - gate_pass_rate
+    - merge_success_rate
+    - agent_utilization
+    - token_usage_estimate
+
+# ──────────────────────────────────────────────────────────────────────────────
+# HUMAN APPROVAL BOUNDARIES
+# ──────────────────────────────────────────────────────────────────────────────
+
+approval:
+  auto_approve:
+    - "l3_refactoring"
+    - "test_addition"
+    - "documentation"
+    - "l2_implementation_with_passing_gates"
+  
+  require_confirm:
+    - "l1_module_creation"
+    - "dependency_addition"
+    - "public_api_change"
+  
+  require_review:
+    - "l0_project_scaffolding"
+    - "auth_change"
+    - "security_posture_change"
+    - "deployment_topology_change"
+    - "high_risk_branch"

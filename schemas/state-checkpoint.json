@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://pi-forge.dev/schemas/state-checkpoint/v1.json",
+  "title": "Pi Forge State Checkpoint",
+  "description": "Recovery checkpoint for resuming interrupted sessions",
+  "type": "object",
+  "required": ["checkpoint_id", "goal_id", "timestamp", "task_graph", "evidence_ledger"],
+  "properties": {
+    "checkpoint_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$"
+    },
+    "goal_id": { "type": "string" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "session_id": { "type": "string" },
+    "task_graph": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string" },
+        "hash": { "type": "string" }
+      }
+    },
+    "evidence_ledger": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string" },
+        "last_seq": { "type": "integer" }
+      }
+    },
+    "active_worktrees": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "task_id": { "type": "string" },
+          "path": { "type": "string" },
+          "branch": { "type": "string" },
+          "last_commit": { "type": "string" },
+          "dirty": { "type": "boolean" }
+        }
+      }
+    },
+    "memory_index": {
+      "type": "object",
+      "description": "Key project facts and conventions learned so far"
+    },
+    "pending_decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "decision_id": { "type": "string" },
+          "description": { "type": "string" },
+          "blocked_tasks": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

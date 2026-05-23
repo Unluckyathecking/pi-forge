@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://pi-forge.dev/schemas/proof-artifact/v1.json",
+  "title": "Pi Forge Proof Artifact",
+  "description": "Machine-readable evidence that a task was completed correctly",
+  "type": "object",
+  "required": ["artifact_id", "task_id", "goal_id", "timestamp", "agent_role", "claims"],
+  "properties": {
+    "artifact_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$"
+    },
+    "task_id": { "type": "string" },
+    "goal_id": { "type": "string" },
+    "version": { "type": "string", "const": "1.0.0" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "agent_role": {
+      "type": "string",
+      "enum": ["coordinator", "planner", "coder", "reviewer", "qa", "security", "integrator"]
+    },
+    "worktree": { "type": "string" },
+    "commit_sha": {
+      "type": "string",
+      "description": "Git commit containing the changes"
+    },
+    "claims": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/claim" },
+      "minItems": 1
+    },
+    "summary": {
+      "type": "object",
+      "properties": {
+        "files_changed": { "type": "integer", "minimum": 0 },
+        "lines_added": { "type": "integer", "minimum": 0 },
+        "lines_removed": { "type": "integer", "minimum": 0 },
+        "tests_added": { "type": "integer", "minimum": 0 },
+        "duration_seconds": { "type": "integer", "minimum": 0 }
+      }
+    }
+  },
+  "definitions": {
+    "claim": {
+      "type": "object",
+      "required": ["gate", "status"],
+      "properties": {
+        "gate": {
+          "type": "string",
+          "enum": ["lint", "typecheck", "test", "build", "security_scan", "contract_verify", "review_pass", "manual_check"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pass", "fail", "skip", "warn"]
+        },
+        "command": { "type": "string" },
+        "exit_code": { "type": "integer" },
+        "output_excerpt": { "type": "string", "maxLength": 2000 },
+        "artifact_path": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "verifier": {
+          "type": "string",
+          "enum": ["mechanical", "agent", "human"]
+        }
+      }
+    }
+  }
+}
