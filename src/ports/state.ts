@@ -27,6 +27,8 @@ export interface StatePort {
   createEvidenceLedger(goalId: string): Promise<EvidenceLedger>;
   appendEvidenceEntry(goalId: string, entry: EvidenceEntry): Promise<void>;
   loadEvidenceLedger(goalId: string): Promise<EvidenceLedger | undefined>;
+  /** Persist the entire ledger (e.g. after finalizing summary at goal close). */
+  saveEvidenceLedger(goalId: string, ledger: EvidenceLedger): Promise<void>;
 
   // ── Proof Artifacts ──
   saveProofArtifact(goalId: string, artifact: ProofArtifact): Promise<void>;

@@ -5,6 +5,9 @@
  * Entry point for the pi-forge command-line interface.
  */
 
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
@@ -13,18 +16,26 @@ import { GitCliAdapter } from '../adapters/git.js';
 import { FilesystemStateAdapter } from '../adapters/state.js';
 import { LocalCommandVerifier } from '../adapters/verifier.js';
 import { SimplePlannerAdapter } from '../adapters/planner.js';
+import { PiSdkWorkerAdapter } from '../adapters/worker.js';
 import { loadConfig } from '../utils/config.js';
 import { createLogger } from '../utils/logger.js';
 import { ForgeError } from '../core/errors.js';
-import type { EvidenceLedger } from '../core/types.js';
+import type { EvidenceLedger, ForgeConfig } from '../core/types.js';
 
+const PI_FORGE_VERSION = resolveVersion();
 const program = new Command();
-// const logger = createLogger('cli');
 
 program
   .name('pi-forge')
   .description('Pi Forge — Proof-carrying autonomous coding factory')
-  .version('1.0.0');
+  .version(PI_FORGE_VERSION);
+
+interface ForgeCommandOptions {
+  config?: string;
+  dryRun?: boolean;
+  verbose?: boolean;
+  noWorker?: boolean;
+}
 
 program
   .command('forge')
@@ -33,8 +44,9 @@ program
   .option('-c, --config <path>', 'Path to config file')
   .option('-d, --dry-run', 'Plan only, do not execute')
   .option('-v, --verbose', 'Verbose output')
-  .action(async (goal: string, options: { config?: string; dryRun?: boolean; verbose?: boolean }) => {
-    if (options.verbose) {
+  .option('--no-worker', 'Disable the Pi SDK worker (gates-only mode)')
+  .action(async (goal: string, options: ForgeCommandOptions) => {
+    if (options.verbose === true) {
       process.env.LOG_LEVEL = 'debug';
     }
 
@@ -47,10 +59,24 @@ program
       const state = new FilesystemStateAdapter();
       const verifier = new LocalCommandVerifier();
       const planner = new SimplePlannerAdapter();
+      let worker: PiSdkWorkerAdapter | undefined;
 
       await git.init(process.cwd());
       await state.init('.pi/state');
       await verifier.init(process.cwd(), buildGateConfig(config));
+
+      if (options.noWorker === true) {
+        spinner.info('Worker disabled via --no-worker; running in gates-only mode');
+      } else {
+        worker = new PiSdkWorkerAdapter();
+        try {
+          await worker.init({ projectRoot: process.cwd() });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          spinner.warn(`Pi SDK worker unavailable; falling back to gates-only mode (${message})`);
+          worker = undefined;
+        }
+      }
 
       const orchestrator = new ForgeOrchestrator({
         config,
@@ -58,10 +84,11 @@ program
         state,
         verifier,
         planner,
+        worker,
         logger: createLogger('orchestrator'),
       });
 
-      if (options.dryRun) {
+      if (options.dryRun === true) {
         console.log(chalk.blue('Dry run mode — planning only'));
         const graph = await planner.decompose({ goal });
         console.log(chalk.green(`Planned ${graph.tasks.length} tasks:`));
@@ -71,9 +98,20 @@ program
         return;
       }
 
-      const ledger = await orchestrator.executeGoal(goal);
-      printResults(ledger);
-      process.exit(ledger.summary?.final_status === 'success' ? 0 : 1);
+      const abortController = new AbortController();
+      const onSigint = (): void => {
+        spinner.warn('SIGINT received; aborting active task');
+        abortController.abort(new Error('SIGINT'));
+      };
+      process.once('SIGINT', onSigint);
+
+      try {
+        const ledger = await orchestrator.executeGoal(goal, undefined, abortController.signal);
+        printResults(ledger);
+        process.exit(ledger.summary?.final_status === 'success' ? 0 : 1);
+      } finally {
+        process.off('SIGINT', onSigint);
+      }
     } catch (err) {
       spinner.fail('Execution failed');
       handleError(err);
@@ -135,18 +173,34 @@ program.parse();
 
 // ── Helpers ──
 
-function buildGateConfig(config: { gates?: { mechanical?: Record<string, unknown> } }): Record<string, { enabled: boolean; fail_on_error?: boolean; timeout_seconds?: number; coverage_threshold?: number }> {
-  const result: Record<string, { enabled: boolean; fail_on_error?: boolean; timeout_seconds?: number; coverage_threshold?: number }> = {};
-  const mechanical = config.gates?.mechanical;
-  if (mechanical) {
-    for (const [key, val] of Object.entries(mechanical)) {
-      if (key === 'order') continue;
-      if (typeof val === 'object' && val !== null && 'enabled' in (val as Record<string, unknown>)) {
-        result[key] = val as { enabled: boolean; fail_on_error?: boolean; timeout_seconds?: number; coverage_threshold?: number };
-      }
-    }
-  }
-  return result;
+interface MechanicalGateConfig {
+  readonly enabled: boolean;
+  readonly fail_on_error?: boolean;
+  readonly timeout_seconds?: number;
+  readonly coverage_threshold?: number;
+}
+
+function buildGateConfig(config: ForgeConfig): Record<string, MechanicalGateConfig> {
+  const { lint, typecheck, test, build, security_scan } = config.gates.mechanical;
+  return {
+    lint: { enabled: lint.enabled, fail_on_error: lint.fail_on_error },
+    typecheck: { enabled: typecheck.enabled, fail_on_error: typecheck.fail_on_error },
+    test: {
+      enabled: test.enabled,
+      fail_on_error: test.require_pass,
+      timeout_seconds: test.timeout_seconds,
+      coverage_threshold: test.coverage_threshold,
+    },
+    build: {
+      enabled: build.enabled,
+      fail_on_error: build.fail_on_error,
+      timeout_seconds: build.timeout_seconds,
+    },
+    security_scan: {
+      enabled: security_scan.enabled,
+      fail_on_error: security_scan.fail_on_critical,
+    },
+  };
 }
 
 function printResults(ledger: EvidenceLedger): void {
@@ -165,6 +219,19 @@ function printResults(ledger: EvidenceLedger): void {
     for (const f of failures) {
       console.log(chalk.red(`  [${f.task_id}] ${f.description}`));
     }
+  }
+}
+
+function resolveVersion(): string {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    // src/cli/index.ts → dist/cli/index.js → package.json is two levels up
+    const pkgPath = join(here, '..', '..', 'package.json');
+    const raw = readFileSync(pkgPath, 'utf-8');
+    const parsed = JSON.parse(raw) as { version?: unknown };
+    return typeof parsed.version === 'string' ? parsed.version : '0.0.0';
+  } catch {
+    return '0.0.0';
   }
 }
 

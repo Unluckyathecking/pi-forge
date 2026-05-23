@@ -61,3 +61,10 @@ export class StateError extends ForgeError {
     this.name = 'StateError';
   }
 }
+
+export class WorkerError extends ForgeError {
+  constructor(message: string, context?: Record<string, unknown>) {
+    super(message, 'WORKER_ERROR', context);
+    this.name = 'WorkerError';
+  }
+}

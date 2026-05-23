@@ -14,10 +14,12 @@ import type {
   ForgeConfig,
 } from './types.js';
 import { OrchestratorError } from './errors.js';
+import { createHash } from 'node:crypto';
 import type { GitPort } from '../ports/git.js';
 import type { StatePort } from '../ports/state.js';
 import type { VerifierPort } from '../ports/verifier.js';
 import type { PlannerPort } from '../ports/planner.js';
+import type { WorkerPort } from '../ports/worker.js';
 import type { Logger } from '../utils/logger.js';
 import { generateId, formatDate, slugify } from '../utils/helpers.js';
 
@@ -27,6 +29,7 @@ export interface OrchestratorDeps {
   readonly state: StatePort;
   readonly verifier: VerifierPort;
   readonly planner: PlannerPort;
+  readonly worker?: WorkerPort;
   readonly logger: Logger;
 }
 
@@ -36,8 +39,10 @@ export class ForgeOrchestrator {
   private readonly state: StatePort;
   private readonly verifier: VerifierPort;
   private readonly planner: PlannerPort;
+  private readonly worker?: WorkerPort;
   private readonly logger: Logger;
   private currentGoalId?: string;
+  private currentGoalSlug?: string;
   private currentSessionId: string;
 
   constructor(deps: OrchestratorDeps) {
@@ -46,6 +51,7 @@ export class ForgeOrchestrator {
     this.state = deps.state;
     this.verifier = deps.verifier;
     this.planner = deps.planner;
+    this.worker = deps.worker;
     this.logger = deps.logger;
     this.currentSessionId = generateId('session');
   }
@@ -54,14 +60,21 @@ export class ForgeOrchestrator {
   // Public API
   // ──────────────────────────────────────────────────────────────────────────
 
-  async executeGoal(goal: string, context?: string): Promise<EvidenceLedger> {
+  async executeGoal(goal: string, context?: string, signal?: AbortSignal): Promise<EvidenceLedger> {
+    const goalSlug = slugify(goal);
     const goalId = this.goalIdFromText(goal);
     this.currentGoalId = goalId;
+    this.currentGoalSlug = goalSlug;
 
     this.logger.info('Starting goal execution', { goalId, goal });
+    if (isAborted(signal)) {
+      throw new OrchestratorError('Goal execution aborted before start', 'ABORTED');
+    }
 
-    // 1. Decompose
-    const graph = await this.planner.decompose({
+    // 1. Decompose. The orchestrator owns goal_id, not the planner: we want
+    // every artifact under this run to share one stable identifier, so we
+    // replace the planner's transient goal_id with a copy that uses ours.
+    const rawGraph = await this.planner.decompose({
       goal,
       context,
       constraints: {
@@ -69,10 +82,7 @@ export class ForgeOrchestrator {
         approval_mode: 'confirm',
       },
     });
-
-    // Override goal_id to match our generated one
-    (graph as { goal_id: string }).goal_id = goalId;
-    this.currentGoalId = goalId;
+    const graph: TaskGraph = { ...rawGraph, goal_id: goalId };
 
     await this.state.saveTaskGraph(goalId, graph);
     this.logger.info('Task graph created', { goalId, tasks: graph.tasks.length });
@@ -97,7 +107,13 @@ export class ForgeOrchestrator {
       }
 
       for (const task of ready) {
-        const result = await this.executeTask(task, graph, ledger);
+        if (isAborted(signal)) {
+          this.logger.warn('Goal aborted mid-batch by caller signal', { taskId: task.id });
+          failedTasks.add(task.id);
+          this.appendEntry(ledger, 'task_failed', 'Aborted by caller signal', undefined, task.id);
+          break;
+        }
+        const result = await this.executeTask(task, graph, ledger, signal);
         if (result) {
           completedTasks.add(task.id);
         } else {
@@ -121,14 +137,19 @@ export class ForgeOrchestrator {
     }
 
     // 5. Finalize ledger
-    (ledger as { summary: EvidenceLedger['summary'] }).summary = {
+    ledger.summary = {
       total_entries: ledger.entries.length,
       tasks_completed: completedTasks.size,
       tasks_failed: failedTasks.size,
       total_duration_seconds: 0,
       final_status: failedTasks.size === 0 ? 'success' : failedTasks.size === graph.tasks.length ? 'failure' : 'partial',
     };
+    ledger.closed_at = formatDate();
 
+    // Flush the in-memory ledger to disk so subsequent writeCheckpoint() or
+    // status queries see the actual entries instead of the empty skeleton
+    // written by createEvidenceLedger.
+    await this.state.saveEvidenceLedger(goalId, ledger);
     await this.state.saveCheckpoint(await this.buildCheckpoint(graph, ledger));
     this.logger.info('Goal execution complete', { goalId, completed: completedTasks.size, failed: failedTasks.size });
 
@@ -165,13 +186,14 @@ export class ForgeOrchestrator {
   private async executeTask(
     task: Task,
     graph: TaskGraph,
-    ledger: EvidenceLedger
+    ledger: EvidenceLedger,
+    signal?: AbortSignal
   ): Promise<boolean> {
     this.logger.info('Executing task', { taskId: task.id, title: task.title, level: task.level });
     this.appendEntry(ledger, 'task_started', task.title, undefined, task.id);
 
     try {
-      const artifact = await this.executeTaskInternal(task, graph);
+      const artifact = await this.executeTaskInternal(task, graph, signal);
       if (artifact) {
         this.appendEntry(ledger, 'task_completed', `Task completed with score ${artifact.summary?.duration_seconds ?? 0}s`, undefined, task.id, [artifact.artifact_id]);
         return true;
@@ -185,7 +207,7 @@ export class ForgeOrchestrator {
     }
   }
 
-  private async executeTaskInternal(task: Task, _graph: TaskGraph): Promise<ProofArtifact | undefined> {
+  private async executeTaskInternal(task: Task, _graph: TaskGraph, signal?: AbortSignal): Promise<ProofArtifact | undefined> {
     if (!this.currentGoalId) {
       throw new OrchestratorError('No active goal', 'NO_ACTIVE_GOAL');
     }
@@ -198,12 +220,39 @@ export class ForgeOrchestrator {
     const worktreePath = `${this.config.git.worktree_base}${this.currentGoalId}/${task.id}`;
     const baseBranch = await this.git.currentBranch();
 
+    task.status = 'running';
     const worktree = await this.git.createWorktree(worktreePath, branchName, baseBranch);
     task.worktree = worktree.path;
     task.branch = worktree.branch;
     task.started_at = formatDate();
 
-    // 2. Run gates
+    // 2. Execute coding work in the worktree
+    let workerResult: { filesChanged: number; linesAdded: number; linesRemoved: number } = { filesChanged: 0, linesAdded: 0, linesRemoved: 0 };
+    if (this.worker) {
+      this.logger.info('Running worker in worktree', { taskId: task.id, worktree: worktree.path });
+      try {
+        const result = await this.worker.execute(task, worktree.path, signal);
+        workerResult = {
+          filesChanged: result.filesChanged,
+          linesAdded: result.linesAdded,
+          linesRemoved: result.linesRemoved,
+        };
+        if (!result.success) {
+          this.logger.warn('Worker reported failure', { taskId: task.id, error: result.error });
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.error('Worker execution failed', { taskId: task.id, error: message });
+        if (this.config.git.auto_clean_worktrees) {
+          await this.git.destroyWorktree(worktree.path, !this.config.git.retain_failed_branches);
+        }
+        throw new OrchestratorError(`Worker failed for task ${task.id}: ${message}`, 'WORKER_FAILED');
+      }
+    } else {
+      this.logger.info('No worker configured; skipping code generation', { taskId: task.id });
+    }
+
+    // 3. Run gates
     const gateResults = await this.verifier.runAllGates(worktree.path);
     const allRequiredPass = gateResults.every(
       (g) =>
@@ -212,7 +261,7 @@ export class ForgeOrchestrator {
         g.status === 'warn'
     );
 
-    // 3. Build proof artifact
+    // 4. Build proof artifact
     const artifact: ProofArtifact = {
       artifact_id: generateId('proof'),
       task_id: task.id,
@@ -231,9 +280,9 @@ export class ForgeOrchestrator {
         verifier: 'mechanical',
       })),
       summary: {
-        files_changed: 0,
-        lines_added: 0,
-        lines_removed: 0,
+        files_changed: workerResult.filesChanged,
+        lines_added: workerResult.linesAdded,
+        lines_removed: workerResult.linesRemoved,
         tests_added: 0,
         duration_seconds: Math.round(gateResults.reduce((sum, g) => sum + g.duration_ms, 0) / 1000),
       },
@@ -276,9 +325,12 @@ export class ForgeOrchestrator {
   ): Promise<void> {
     if (!this.currentGoalId) return;
 
+    const goalSlug = this.currentGoalSlug ?? slugify(graph.goal_id);
     const sessionBranch = this.config.git.session_branch_template
       .replace('{date}', new Date().toISOString().split('T')[0])
-      .replace('{goal_slug}', slugify(graph.goal_id.split('-').slice(0, -1).join('-')));
+      .replace('{goal_slug}', goalSlug)
+      .replace('{goal_id}', graph.goal_id)
+      .replace('{sessionId}', this.currentSessionId);
 
     // Create session branch from main
     const baseBranch = await this.git.currentBranch();
@@ -352,14 +404,23 @@ export class ForgeOrchestrator {
   }
 
   private async buildCheckpoint(graph: TaskGraph, ledger: EvidenceLedger): Promise<StateCheckpoint> {
-    const worktrees = graph.tasks
-      .filter((t) => t.worktree)
-      .map((t) => ({
-        task_id: t.id,
-        path: t.worktree!,
-        branch: t.branch!,
-        dirty: false,
-      }));
+    const candidates = graph.tasks.filter(
+      (t): t is Task & { worktree: string; branch: string } =>
+        typeof t.worktree === 'string' && typeof t.branch === 'string'
+    );
+    const worktrees = await Promise.all(
+      candidates.map(async (t) => {
+        const dirty = await this.safeIsDirty(t.worktree);
+        return {
+          task_id: t.id,
+          path: t.worktree,
+          branch: t.branch,
+          dirty,
+        };
+      })
+    );
+
+    const taskGraphHash = sha256Json(graph);
 
     return {
       checkpoint_id: generateId('chk'),
@@ -368,14 +429,34 @@ export class ForgeOrchestrator {
       session_id: this.currentSessionId,
       task_graph: {
         path: `.pi/state/task-graphs/${graph.goal_id}.json`,
-        hash: 'sha256-placeholder',
+        hash: `sha256:${taskGraphHash}`,
       },
       evidence_ledger: {
         path: `.pi/state/evidence/${graph.goal_id}/ledger.json`,
-        last_seq: ledger.entries.length - 1,
+        last_seq: Math.max(ledger.entries.length - 1, 0),
       },
       active_worktrees: worktrees,
       pending_decisions: [],
     };
   }
+
+  private async safeIsDirty(worktreePath: string): Promise<boolean> {
+    try {
+      return await this.git.isDirty(worktreePath);
+    } catch (err) {
+      this.logger.warn('isDirty probe failed; assuming clean', {
+        worktree: worktreePath,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
+  }
+}
+
+function sha256Json(value: unknown): string {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
+function isAborted(signal: AbortSignal | undefined): boolean {
+  return Boolean(signal?.aborted);
 }

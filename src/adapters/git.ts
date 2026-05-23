@@ -287,6 +287,17 @@ export class GitCliAdapter implements GitPort {
     return { ok: true, message: stdout.trim() };
   }
 
+  async isDirty(path: string): Promise<boolean> {
+    // `git status --porcelain` catches tracked changes AND untracked files.
+    // `git diff HEAD --quiet` only flags tracked-file diffs, which would
+    // miss new files an agent just wrote into the worktree.
+    const { stdout, exitCode } = await execGit(['status', '--porcelain'], path);
+    if (exitCode !== 0) {
+      throw new GitError(`Failed to check dirty state for ${path}`, { path });
+    }
+    return stdout.trim().length > 0;
+  }
+
   // ───────────────────────────────────────────────────────────────────────────
   // Private helpers
   // ───────────────────────────────────────────────────────────────────────────
@@ -303,11 +314,6 @@ export class GitCliAdapter implements GitPort {
     const commit = commitCode === 0 ? commitOut.trim() : undefined;
 
     return { path, branch, commit, dirty };
-  }
-
-  private async isDirty(path: string): Promise<boolean> {
-    const { exitCode } = await execGit(['diff', 'HEAD', '--quiet'], path);
-    return exitCode !== 0;
   }
 
   private async getConflictedFiles(cwd: string): Promise<string[]> {

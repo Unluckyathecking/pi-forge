@@ -1,7 +1,8 @@
 {
   "name": "pi-forge",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Pi Forge — Proof-carrying, hexagonal-core, multi-level autonomous coding factory",
+  "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "pi": {
@@ -19,15 +20,33 @@
     "build": "tsc",
     "build:clean": "rm -rf dist && tsc",
     "watch": "tsc --watch",
-    "test": "jest",
-    "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch",
+    "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage",
     "lint": "eslint src/ --ext .ts",
     "lint:fix": "eslint src/ --ext .ts --fix",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && npm run lint && npm run test",
+    "check": "npm run typecheck && npm run lint && npm run test:coverage",
+    "prepublishOnly": "npm run check && npm run build:clean",
     "start": "node dist/cli/index.js",
     "dev": "tsx src/cli/index.ts"
+  },
+  "files": [
+    "dist",
+    "extensions",
+    "schemas",
+    "roles",
+    "config.yaml",
+    "ARCHITECTURE.md",
+    "README.md"
+  ],
+  "peerDependenciesMeta": {
+    "@mariozechner/pi-coding-agent": {
+      "optional": true
+    }
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": ">=0.73.0"
   },
   "dependencies": {
     "js-yaml": "^4.1.0",

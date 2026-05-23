@@ -53,6 +53,9 @@ export interface GitPort {
   /** Abort current merge/rebase */
   abortMerge(path: string): Promise<void>;
 
+  /** Report whether the working tree at `path` has uncommitted changes vs HEAD. */
+  isDirty(path: string): Promise<boolean>;
+
   /** Health check */
   health(): Promise<{ ok: boolean; message?: string }>;
 }

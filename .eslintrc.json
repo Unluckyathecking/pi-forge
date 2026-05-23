@@ -22,5 +22,5 @@
     "@typescript-eslint/require-await": "off",
     "no-console": "off"
   },
-  "ignorePatterns": ["dist/", "node_modules/", "jest.config.js"]
+  "ignorePatterns": ["dist/", "node_modules/", "jest.config.cjs"]
 }

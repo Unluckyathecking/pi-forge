@@ -157,9 +157,14 @@ export interface EvidenceLedger {
   readonly goal_id: string;
   readonly version: string;
   readonly created_at: string;
-  readonly closed_at?: string;
+  closed_at?: string;
   entries: EvidenceEntry[];
-  readonly summary?: {
+  /**
+   * Written once when the orchestrator finalizes the ledger. Intentionally
+   * mutable: callers must not depend on a frozen ledger until `closed_at`
+   * is set.
+   */
+  summary?: {
     readonly total_entries?: number;
     readonly tasks_completed?: number;
     readonly tasks_failed?: number;

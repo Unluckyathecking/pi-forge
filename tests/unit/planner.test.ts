@@ -50,4 +50,34 @@ describe('SimplePlannerAdapter', () => {
     const h = await planner.health();
     expect(h.ok).toBe(true);
   });
+
+  it('emits refactor branch for refactor goals', async () => {
+    const graph = await planner.decompose({ goal: 'Refactor auth module' });
+    const titles = graph.tasks.map((t) => t.title.toLowerCase());
+    expect(titles.some((t) => t.includes('refactor'))).toBe(true);
+  });
+
+  it('refineGraph appends a follow-up task linked to the last task', async () => {
+    const base = await planner.decompose({ goal: 'Add caching' });
+    const refined = await planner.refineGraph(base, 'Address latency edge case in stale eviction');
+    expect(refined.tasks.length).toBe(base.tasks.length + 1);
+    const last = refined.tasks[refined.tasks.length - 1];
+    expect(last.description).toContain('latency edge case');
+    expect(refined.edges.some((e) => e.to === last.id)).toBe(true);
+  });
+
+  it('falls back to a single task when maxDepth is 0', async () => {
+    const graph = await planner.decompose({ goal: 'Document the API', constraints: { max_depth: 0 } });
+    expect(graph.tasks).toHaveLength(1);
+  });
+
+  it('adds security_scan and build requirements for L0 and L1 tasks', async () => {
+    const reqs = await planner.generateProofRequirements({
+      id: 't', level: 0, title: 'project', status: 'pending',
+      proof_requirements: [], input_contracts: [], output_contracts: [], estimated_minutes: 600,
+    } as Task);
+    const gates = reqs.map((r) => r.gate);
+    expect(gates).toContain('build');
+    expect(gates).toContain('security_scan');
+  });
 });

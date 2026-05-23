@@ -41,7 +41,7 @@ export default function piForgeExtension(pi: ExtensionAPI) {
 		promptSnippet: "pi_forge_plan - Decompose a goal with Pi Forge before implementing it.",
 		promptGuidelines: [
 			"For Forge workflows, call pi_forge_plan first, then implement with normal Pi tools.",
-			"Pi Forge is currently an orchestration/check harness; the active Pi model writes the actual code.",
+			"Pi Forge uses the Pi SDK worker to generate code inside isolated git worktrees when available.",
 		],
 		parameters: GoalParams,
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
@@ -54,7 +54,7 @@ export default function piForgeExtension(pi: ExtensionAPI) {
 		name: "pi_forge_run",
 		label: "Pi Forge Run",
 		description:
-			"Run the existing Pi Forge batch orchestrator for a goal. Use only when the user explicitly asks to run the harness; current Pi Forge does not itself edit code.",
+			"Run the Pi Forge batch orchestrator for a goal. Pi Forge will spawn an agent session per task to edit files in isolated worktrees when the Pi SDK is available.",
 		promptSnippet: "pi_forge_run - Run the Pi Forge batch harness for a goal.",
 		parameters: GoalParams,
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
@@ -154,7 +154,7 @@ function buildForgeKickoff(goal: string): string {
 		"",
 		"Workflow:",
 		"1. Call pi_forge_plan for the goal and use the returned task graph as the implementation checklist.",
-		"2. Use normal Pi coding tools to inspect and edit files. Pi Forge does not currently write code by itself.",
+		"2. Pi Forge spawns a Pi SDK agent in each task worktree to generate code. You can also use normal Pi tools to inspect and edit files.",
 		"3. Keep changes scoped to the planned tasks and preserve unrelated user changes.",
 		"4. Run pi_forge_check before reporting completion.",
 		"5. Summarize the plan, changed files, gate results, and any remaining risks.",

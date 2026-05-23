@@ -19,6 +19,18 @@ import type {
 import type { StatePort } from '../ports/state.js';
 import { StateError } from '../core/errors.js';
 
+/**
+ * Restrict path components to a slug-friendly alphabet so a hostile
+ * `artifact_id` or `goal_id` deserialized from external state cannot
+ * traverse outside the configured base path.
+ */
+const ID_PATTERN = /^[A-Za-z0-9_.-]+$/;
+function assertSafeId(id: string, field: string): void {
+  if (!ID_PATTERN.test(id)) {
+    throw new StateError(`Unsafe ${field}: contains characters outside [A-Za-z0-9_.-]`, { id });
+  }
+}
+
 export class FilesystemStateAdapter implements StatePort {
   readonly name = 'filesystem';
   private basePath = '.pi/state';
@@ -36,10 +48,12 @@ export class FilesystemStateAdapter implements StatePort {
   }
 
   private taskGraphPath(goalId: string): string {
+    assertSafeId(goalId, 'goalId');
     return join(this.basePath, 'task-graphs', `${goalId}.json`);
   }
 
   private evidenceDir(goalId: string): string {
+    assertSafeId(goalId, 'goalId');
     return join(this.basePath, 'evidence', goalId);
   }
 
@@ -48,10 +62,12 @@ export class FilesystemStateAdapter implements StatePort {
   }
 
   private proofPath(goalId: string, artifactId: string): string {
+    assertSafeId(artifactId, 'artifactId');
     return join(this.evidenceDir(goalId), 'proofs', `${artifactId}.json`);
   }
 
   private checkpointPath(checkpointId: string): string {
+    assertSafeId(checkpointId, 'checkpointId');
     return join(this.basePath, 'checkpoints', `${checkpointId}.json`);
   }
 
@@ -72,11 +88,10 @@ export class FilesystemStateAdapter implements StatePort {
       const content = await readFile(path, 'utf-8');
       return JSON.parse(content) as T;
     } catch (err) {
-      if (
-        err instanceof Error &&
-        'code' in err &&
-        (err as NodeJS.ErrnoException).code === 'ENOENT'
-      ) {
+      // ENOENT (file not found) is a non-error read miss; surface as undefined
+      // so callers can distinguish "not yet written" from genuine IO failure.
+      const code = (err as { code?: unknown } | null)?.code;
+      if (code === 'ENOENT') {
         return undefined;
       }
       throw new StateError(
@@ -150,6 +165,25 @@ export class FilesystemStateAdapter implements StatePort {
 
   async loadEvidenceLedger(goalId: string): Promise<EvidenceLedger | undefined> {
     return this.readJson<EvidenceLedger>(this.ledgerPath(goalId));
+  }
+
+  async saveEvidenceLedger(goalId: string, ledger: EvidenceLedger): Promise<void> {
+    const ledgerPath = this.ledgerPath(goalId);
+    let release: (() => Promise<void>) | undefined;
+    try {
+      release = await lock(ledgerPath, { retries: 5 });
+      await this.writeJson(ledgerPath, ledger);
+    } catch (err) {
+      if (err instanceof StateError) throw err;
+      throw new StateError(
+        `Failed to save evidence ledger for ${goalId}`,
+        { cause: err instanceof Error ? err.message : String(err) }
+      );
+    } finally {
+      if (release) {
+        await release();
+      }
+    }
   }
 
   // ── Proof Artifacts ──

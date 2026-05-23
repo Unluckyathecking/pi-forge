@@ -1,6 +1,11 @@
 import { describe, it, expect, jest } from '@jest/globals';
 import { ForgeOrchestrator } from '../../src/core/orchestrator.js';
-import type { ForgeConfig, GitPort, StatePort, VerifierPort, PlannerPort, EvidenceLedger, TaskGraph } from '../../src/core/types.js';
+import type { ForgeConfig } from '../../src/core/types.js';
+import type { GitPort } from '../../src/ports/git.js';
+import type { StatePort } from '../../src/ports/state.js';
+import type { VerifierPort } from '../../src/ports/verifier.js';
+import type { PlannerPort } from '../../src/ports/planner.js';
+import type { WorkerPort } from '../../src/ports/worker.js';
 import type { Logger } from '../../src/utils/logger.js';
 
 function makeMockConfig(): ForgeConfig {
@@ -53,6 +58,7 @@ function makeMockGit(): GitPort {
     merge: jest.fn<GitPort['merge']>().mockResolvedValue({ success: true, conflicts: [] }),
     hasConflicts: jest.fn<GitPort['hasConflicts']>().mockResolvedValue(false),
     abortMerge: jest.fn<GitPort['abortMerge']>().mockResolvedValue(undefined),
+    isDirty: jest.fn<GitPort['isDirty']>().mockResolvedValue(false),
     health: jest.fn<GitPort['health']>().mockResolvedValue({ ok: true }),
   };
 }
@@ -72,6 +78,7 @@ function makeMockState(): StatePort {
     listTaskGraphs: jest.fn<StatePort['listTaskGraphs']>().mockResolvedValue([]),
     createEvidenceLedger: jest.fn<StatePort['createEvidenceLedger']>().mockResolvedValue({ goal_id: 'g', version: '1.0.0', created_at: new Date().toISOString(), entries: [] }),
     appendEvidenceEntry: jest.fn<StatePort['appendEvidenceEntry']>().mockResolvedValue(undefined),
+    saveEvidenceLedger: jest.fn<StatePort['saveEvidenceLedger']>().mockResolvedValue(undefined),
     loadEvidenceLedger: jest.fn<StatePort['loadEvidenceLedger']>().mockImplementation(async (goalId) => ({
       goal_id: goalId,
       version: '1.0.0',
@@ -102,6 +109,15 @@ function makeMockVerifier(): VerifierPort {
     scoreRisk: jest.fn<VerifierPort['scoreRisk']>().mockResolvedValue({ score: 10, components: {}, decision: 'auto_promote' }),
     scanDiff: jest.fn<VerifierPort['scanDiff']>().mockResolvedValue({ matches: [] }),
     health: jest.fn<VerifierPort['health']>().mockResolvedValue({ ok: true }),
+  };
+}
+
+function makeMockWorker(): WorkerPort {
+  return {
+    name: 'mock-worker',
+    init: jest.fn<WorkerPort['init']>().mockResolvedValue(undefined),
+    execute: jest.fn<WorkerPort['execute']>().mockResolvedValue({ success: true, filesChanged: 2, linesAdded: 10, linesRemoved: 3 }),
+    health: jest.fn<WorkerPort['health']>().mockResolvedValue({ ok: true }),
   };
 }
 
@@ -154,6 +170,28 @@ describe('ForgeOrchestrator', () => {
     expect(ledger.summary?.final_status).toBe('success');
   });
 
+  it('uses worker when provided and records file changes', async () => {
+    const git = makeMockGit();
+    const state = makeMockState();
+    const verifier = makeMockVerifier();
+    const planner = makeMockPlanner();
+    const worker = makeMockWorker();
+
+    const orch = new ForgeOrchestrator({
+      config: makeMockConfig(),
+      git,
+      state,
+      verifier,
+      planner,
+      worker,
+      logger: mockLogger,
+    });
+
+    const ledger = await orch.executeGoal('Add login feature');
+    expect(ledger.summary?.final_status).toBe('success');
+    expect(worker.execute).toHaveBeenCalled();
+  });
+
   it('writes checkpoints', async () => {
     const git = makeMockGit();
     const state = makeMockState();
@@ -174,5 +212,70 @@ describe('ForgeOrchestrator', () => {
     const checkpoint = await orch.writeCheckpoint();
     expect(checkpoint.checkpoint_id).toContain('chk');
     expect(checkpoint.goal_id).toBeDefined();
+    expect(checkpoint.task_graph.hash.startsWith('sha256:')).toBe(true);
+  });
+
+  it('marks goal as failure when worker throws', async () => {
+    const git = makeMockGit();
+    const state = makeMockState();
+    const verifier = makeMockVerifier();
+    const planner = makeMockPlanner();
+    const worker: WorkerPort = {
+      name: 'failing-worker',
+      init: jest.fn<WorkerPort['init']>().mockResolvedValue(undefined),
+      execute: jest.fn<WorkerPort['execute']>().mockRejectedValue(new Error('llm down')),
+      health: jest.fn<WorkerPort['health']>().mockResolvedValue({ ok: true }),
+    };
+
+    const orch = new ForgeOrchestrator({
+      config: makeMockConfig(),
+      git,
+      state,
+      verifier,
+      planner,
+      worker,
+      logger: mockLogger,
+    });
+
+    const ledger = await orch.executeGoal('Add login feature');
+    expect(['failure', 'partial']).toContain(ledger.summary?.final_status);
+    expect(ledger.entries.some((e) => e.type === 'task_failed')).toBe(true);
+  });
+
+  it('records failure when required gates fail', async () => {
+    const git = makeMockGit();
+    const state = makeMockState();
+    const planner = makeMockPlanner();
+    const verifier: VerifierPort = {
+      ...makeMockVerifier(),
+      runAllGates: jest.fn<VerifierPort['runAllGates']>().mockResolvedValue([
+        { gate: 'lint', status: 'fail', command: '', exit_code: 1, output: 'lint exploded', duration_ms: 1 },
+      ]),
+    };
+
+    const orch = new ForgeOrchestrator({
+      config: makeMockConfig(),
+      git,
+      state,
+      verifier,
+      planner,
+      logger: mockLogger,
+    });
+
+    const ledger = await orch.executeGoal('Ship feature');
+    expect(ledger.summary?.tasks_failed).toBeGreaterThanOrEqual(1);
+  });
+
+  it('rejects writeCheckpoint when no goal has been executed', async () => {
+    const orch = new ForgeOrchestrator({
+      config: makeMockConfig(),
+      git: makeMockGit(),
+      state: makeMockState(),
+      verifier: makeMockVerifier(),
+      planner: makeMockPlanner(),
+      logger: mockLogger,
+    });
+
+    await expect(orch.writeCheckpoint()).rejects.toThrow(/no active goal/i);
   });
 });
