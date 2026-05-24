@@ -1,5 +1,9 @@
-import { describe, it, expect } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { SimplePlannerAdapter } from '../../src/adapters/planner.js';
+import type { Task } from '../../src/core/types.js';
 
 describe('SimplePlannerAdapter', () => {
   const planner = new SimplePlannerAdapter();
@@ -79,5 +83,88 @@ describe('SimplePlannerAdapter', () => {
     const gates = reqs.map((r) => r.gate);
     expect(gates).toContain('build');
     expect(gates).toContain('security_scan');
+  });
+
+  describe('PLAN.md detection', () => {
+    let tmpDir: string;
+
+    beforeEach(async () => {
+      tmpDir = await mkdtemp(join(tmpdir(), 'pi-forge-planner-'));
+    });
+
+    afterEach(async () => {
+      await rm(tmpDir, { recursive: true, force: true });
+    });
+
+    it('decompose with PLAN.md detection emits 2-task DAG', async () => {
+      await writeFile(join(tmpDir, 'PLAN.md'), '# Plan\n\nSteps to ship the feature.\n', 'utf-8');
+
+      const graph = await planner.decompose({
+        goal: 'Execute PLAN.md',
+        projectRoot: tmpDir,
+      });
+
+      const ids = graph.tasks.map((t) => t.id);
+      expect(ids).toEqual(['implement', 'verify']);
+    });
+
+    it('decompose without PLAN.md emits legacy 3-task feature DAG', async () => {
+      // tmpDir has no PLAN.md file even though the goal mentions it.
+      const graph = await planner.decompose({
+        goal: 'Execute PLAN.md',
+        projectRoot: tmpDir,
+      });
+
+      const ids = graph.tasks.map((t) => t.id);
+      expect(ids).toEqual(['plan', 'implement', 'test']);
+    });
+
+    it('decompose ignores PLAN.md detection when goal text does not reference it', async () => {
+      // PLAN.md exists in projectRoot, but the goal never mentions it.
+      await writeFile(join(tmpDir, 'PLAN.md'), '# Plan\n\nIrrelevant here.\n', 'utf-8');
+
+      const graph = await planner.decompose({
+        goal: 'Add a feature for users',
+        projectRoot: tmpDir,
+      });
+
+      const ids = graph.tasks.map((t) => t.id);
+      expect(ids).toEqual(['plan', 'implement', 'test']);
+    });
+  });
+
+  describe('--tasks filter', () => {
+    it('decompose with tasks filter returns only matching tasks', async () => {
+      const graph = await planner.decompose({
+        goal: 'Add user authentication',
+        tasks: ['implement'],
+      });
+
+      expect(graph.tasks).toHaveLength(1);
+      expect(graph.tasks[0].id).toBe('implement');
+    });
+
+    it('decompose with tasks filter preserves declared order', async () => {
+      // Request order is ['test', 'plan'] but planner produced order is
+      // ['plan', 'implement', 'test']. The filtered output must follow the
+      // planner's order (plan then test), NOT the request order.
+      const graph = await planner.decompose({
+        goal: 'Add user authentication',
+        tasks: ['test', 'plan'],
+      });
+
+      const ids = graph.tasks.map((t) => t.id);
+      expect(ids).toEqual(['plan', 'test']);
+    });
+
+    it('decompose with empty tasks array uses full decomposition', async () => {
+      const graph = await planner.decompose({
+        goal: 'Add user authentication',
+        tasks: [],
+      });
+
+      const ids = graph.tasks.map((t) => t.id);
+      expect(ids).toEqual(['plan', 'implement', 'test']);
+    });
   });
 });

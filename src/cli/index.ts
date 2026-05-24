@@ -40,6 +40,7 @@ interface ForgeCommandOptions {
   model?: string;
   provider?: string;
   keepOnFail?: boolean;
+  tasks?: string;
 }
 
 interface CleanupCommandOptions {
@@ -65,6 +66,7 @@ program
   .option('--model <id>', 'Model id within the provider (default: kimi-for-coding)')
   .option('--provider <name>', 'Provider name (default: kimi-coder)')
   .option('--keep-on-fail', 'Preserve worktree on gate failure (overrides config)')
+  .option('--tasks <list>', 'Comma-separated task IDs to run (e.g. "implement" or "plan,implement"). Skips others from the decomposed graph.')
   .action(async (goal: string, options: ForgeCommandOptions) => {
     if (options.verbose === true) {
       process.env.LOG_LEVEL = 'debug';
@@ -120,9 +122,17 @@ program
         logger: createLogger('orchestrator'),
       });
 
+      const tasksFilter = options.tasks
+        ? options.tasks.split(',').map((s) => s.trim()).filter((s) => s.length > 0)
+        : undefined;
+
       if (options.dryRun === true) {
         console.log(chalk.blue('Dry run mode — planning only'));
-        const graph = await planner.decompose({ goal });
+        const graph = await planner.decompose({
+          goal,
+          tasks: tasksFilter,
+          projectRoot: process.cwd(),
+        });
         console.log(chalk.green(`Planned ${graph.tasks.length} tasks:`));
         for (const task of graph.tasks) {
           console.log(`  [L${task.level}] ${task.id}: ${task.title}`);
@@ -138,7 +148,10 @@ program
       process.once('SIGINT', onSigint);
 
       try {
-        const ledger = await orchestrator.executeGoal(goal, undefined, abortController.signal);
+        const ledger = await orchestrator.executeGoal(goal, undefined, abortController.signal, {
+          tasks: tasksFilter,
+          projectRoot: process.cwd(),
+        });
         printResults(ledger);
         process.exit(ledger.summary?.final_status === 'success' ? 0 : 1);
       } finally {

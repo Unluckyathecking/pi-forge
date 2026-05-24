@@ -5,6 +5,9 @@
  * Suitable for MVP and deterministic testing.
  */
 
+import { statSync } from 'node:fs';
+import { join } from 'node:path';
+
 import type {
   TaskGraph,
   Task,
@@ -20,7 +23,21 @@ export class SimplePlannerAdapter implements PlannerPort {
 
   async decompose(request: DecompositionRequest): Promise<TaskGraph> {
     const goalId = this.goalIdFromText(request.goal);
-    const tasks = this.buildTasks(request.goal, request.constraints?.max_depth ?? 3);
+    const projectRoot = request.projectRoot ?? process.cwd();
+    const planMdDetected = this.detectPlanMd(request.goal, projectRoot);
+    let tasks = this.buildTasks(
+      request.goal,
+      request.constraints?.max_depth ?? 3,
+      planMdDetected,
+    );
+
+    // --tasks override: filter to the allowlist, preserving the order the
+    // planner decomposed them in. Empty array = no filtering (use full set).
+    if (request.tasks && request.tasks.length > 0) {
+      const allowlist = new Set(request.tasks);
+      tasks = tasks.filter((t) => allowlist.has(t.id));
+    }
+
     const edges = this.buildEdges(tasks);
 
     return {
@@ -136,7 +153,17 @@ export class SimplePlannerAdapter implements PlannerPort {
     return `${slug}-${ts}`;
   }
 
-  private buildTasks(goal: string, maxDepth: number): Task[] {
+  private detectPlanMd(goal: string, projectRoot: string): boolean {
+    if (!/PLAN\.md/i.test(goal)) return false;
+    try {
+      statSync(join(projectRoot, 'PLAN.md'));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private buildTasks(goal: string, maxDepth: number, planMdDetected: boolean): Task[] {
     const lower = goal.toLowerCase();
     const isRefactor = lower.includes('refactor');
     const isFix = lower.includes('fix') || lower.includes('bug');
@@ -145,9 +172,15 @@ export class SimplePlannerAdapter implements PlannerPort {
     const tasks: Task[] = [];
 
     if (maxDepth >= 1 && isFeature) {
-      tasks.push(this.makeTask('plan', 1, 'Plan architecture and contracts', goal, ['lint', 'typecheck']));
-      tasks.push(this.makeTask('implement', 1, 'Implement feature', goal, ['lint', 'typecheck', 'test', 'build']));
-      tasks.push(this.makeTask('test', 1, 'Write integration tests', goal, ['lint', 'typecheck', 'test']));
+      if (planMdDetected) {
+        // Skip the redundant plan task — PLAN.md IS the plan.
+        tasks.push(this.makeTask('implement', 1, 'Implement per PLAN.md', goal, ['lint', 'typecheck', 'test', 'build']));
+        tasks.push(this.makeTask('verify', 1, 'Verify gates + write demo checklist', goal, ['lint', 'typecheck', 'test']));
+      } else {
+        tasks.push(this.makeTask('plan', 1, 'Plan architecture and contracts', goal, ['lint', 'typecheck']));
+        tasks.push(this.makeTask('implement', 1, 'Implement feature', goal, ['lint', 'typecheck', 'test', 'build']));
+        tasks.push(this.makeTask('test', 1, 'Write integration tests', goal, ['lint', 'typecheck', 'test']));
+      }
     } else if (maxDepth >= 1 && isFix) {
       tasks.push(this.makeTask('reproduce', 2, 'Reproduce bug', goal, ['test']));
       tasks.push(this.makeTask('fix', 2, 'Apply fix', goal, ['lint', 'typecheck', 'test']));

@@ -14,6 +14,20 @@ export interface DecompositionRequest {
     readonly time_budget_minutes?: number;
     readonly approval_mode?: 'auto' | 'confirm' | 'review';
   };
+  /**
+   * Optional task-id allowlist. When provided, the planner returns
+   * only tasks whose `id` matches one in this list (preserving the
+   * order it decomposed them in). Empty array = use full decomposition.
+   * Set by `pi-forge forge --tasks <comma-list>`.
+   */
+  readonly tasks?: readonly string[];
+  /**
+   * Path to check for a PLAN.md file (default: process.cwd()).
+   * When PLAN.md exists AND the goal text contains "PLAN.md"
+   * (case-insensitive), the planner emits a 2-task DAG
+   * (implement + verify) instead of the legacy 3-task.
+   */
+  readonly projectRoot?: string;
 }
 
 export interface ContractSet {

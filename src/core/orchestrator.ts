@@ -63,7 +63,12 @@ export class ForgeOrchestrator {
   // Public API
   // ──────────────────────────────────────────────────────────────────────────
 
-  async executeGoal(goal: string, context?: string, signal?: AbortSignal): Promise<EvidenceLedger> {
+  async executeGoal(
+    goal: string,
+    context?: string,
+    signal?: AbortSignal,
+    options?: { tasks?: readonly string[]; projectRoot?: string },
+  ): Promise<EvidenceLedger> {
     const goalSlug = slugify(goal);
     const goalId = this.goalIdFromText(goal);
     this.currentGoalId = goalId;
@@ -84,6 +89,8 @@ export class ForgeOrchestrator {
         max_depth: this.config.core.escalation.max_escalation_depth,
         approval_mode: 'confirm',
       },
+      tasks: options?.tasks,
+      projectRoot: options?.projectRoot ?? process.cwd(),
     });
     const graph: TaskGraph = { ...rawGraph, goal_id: goalId };
 
