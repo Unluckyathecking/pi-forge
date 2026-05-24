@@ -6,6 +6,48 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-05-24
+
+Phase 3 — smart planner + honest test gate. Operators stop paying
+Kimi tokens for redundant plan-tasks when PLAN.md already exists, and
+the test gate stops lying about no-op `npm test` scripts.
+
+### Added
+
+- **`SimplePlannerAdapter` PLAN.md detection**. When the goal text
+  references `PLAN.md` (case-insensitive) AND a `PLAN.md` file exists
+  at the goal's project root, the planner emits a **2-task DAG**
+  (`implement` + `verify`) instead of the legacy 3-task
+  (`plan` + `implement` + `test`). The skipped plan task was typically
+  pure waste — the operator's PLAN.md *is* the plan.
+- **`--tasks <comma-list>` CLI flag** on `pi-forge forge`. Operator
+  can run only specific tasks from the decomposed DAG, e.g.
+  `--tasks implement` to skip plan + test, or `--tasks plan,implement`
+  to skip test. Filter is an allowlist; tasks preserve the planner's
+  declared order.
+- **`DecompositionRequest.{tasks, projectRoot}`** optional fields on
+  the planner port. Used by the CLI and orchestrator to plumb
+  `--tasks` + PLAN.md detection.
+- **`executeGoal(goal, context?, signal?, options?)`** — `options.tasks`
+  and `options.projectRoot` plumb the new CLI flags through.
+- **`LocalCommandVerifier` no-op test detection**. When `npm test` is
+  a no-op (`echo … && exit 0`, `exit 0`, `true`, or npm's default
+  `echo "Error: no test specified" && exit 1`), the test gate is now
+  marked `'skip'` instead of `'pass'`. The result's `output` explains
+  the detection. Operators see an honest signal that no tests ran.
+
+### Backwards compatibility
+
+- PLAN.md detection requires BOTH the goal text matching AND the file
+  existing — neither condition alone changes behaviour.
+- `--tasks` defaults to undefined; without it, the full decomposed
+  DAG runs unchanged.
+- `executeGoal`'s 4th `options?` arg is optional; existing callers
+  compile unchanged.
+- No-op test detection only changes the gate's STATUS reporting —
+  the gate still runs to completion. Operators relying on
+  `status: 'pass'` for a no-op `npm test` now see `status: 'skip'`.
+
 ## [1.3.0] — 2026-05-24
 
 Phase 2 — failed-worktree preservation. Pi-forge can now preserve the
