@@ -104,6 +104,20 @@ git:
   failed_task_behavior: "purge"
   # Suffix for renamed failed worktrees. Collisions get a unix-timestamp suffix.
   failed_worktree_suffix: ".failed"
+  # Operator-defined shell-script hooks. Best-effort: failures log a
+  # warning but never abort pi-forge. Available env vars (all hooks):
+  #   PI_FORGE_TASK_ID, PI_FORGE_GOAL_ID, PI_FORGE_BRANCH,
+  #   PI_FORGE_WORKTREE, PI_FORGE_TIMESTAMP
+  # Failure hook extras:
+  #   PI_FORGE_FAILED_GATES (comma list), PI_FORGE_TAG_REF,
+  #   PI_FORGE_COMMIT_SHA, PI_FORGE_FAILURE_REASON
+  # Success hook extras:
+  #   PI_FORGE_COMMIT_SHA, PI_FORGE_DURATION_SECONDS
+  hooks: {}
+  # Example:
+  # hooks:
+  #   on_task_failed: "./scripts/on-fail.sh"
+  #   on_task_completed: "./scripts/on-success.sh"
   archive_after_days: 7
   
   # Commit policy

@@ -1,5 +1,5 @@
 import { describe, it, expect, jest } from '@jest/globals';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ForgeOrchestrator } from '../../src/core/orchestrator.js';
@@ -35,6 +35,7 @@ function makeMockConfig(): ForgeConfig {
       preserve_worktree_on_failure: false,
       failed_task_behavior: 'purge',
       failed_worktree_suffix: '.failed',
+      hooks: {},
       archive_after_days: 7,
       commit: { require_conventional_commits: true, include_task_id: true, include_evidence_summary: true, max_commit_size_lines: 500 },
       merge: { strategy: 'rebase', require_linear_history: true, squash_on_merge: false },
@@ -765,5 +766,233 @@ describe('ForgeOrchestrator', () => {
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Phase 5: hook system
+  // ──────────────────────────────────────────────────────────────────────────
+
+  it('on_task_failed hook is invoked with correct env vars when gates fail', async () => {
+    // Use a real temp dir; the hook writes its env to a sentinel file we
+    // can read back to assert the env vars were exported correctly.
+    const tmp = await mkdtemp(join(tmpdir(), 'pi-forge-hook-fail-'));
+    try {
+      const sentinel = join(tmp, 'env.out');
+      const hookPath = join(tmp, 'on-fail.sh');
+      await writeFile(
+        hookPath,
+        '#!/bin/sh\n' +
+          'env | grep ^PI_FORGE_ > "$SENTINEL"\n',
+        'utf-8',
+      );
+      await chmod(hookPath, 0o755);
+      process.env.SENTINEL = sentinel;
+
+      const infoSpy = jest.fn();
+      const logger: Logger = {
+        info: infoSpy,
+        warn: jest.fn(),
+        error: jest.fn(),
+        debug: jest.fn(),
+      };
+
+      const git = makeMockGit();
+      const state = makeMockState();
+      const planner = makeMockPlanner();
+      const verifier: VerifierPort = {
+        ...makeMockVerifier(),
+        runAllGates: jest.fn<VerifierPort['runAllGates']>().mockResolvedValue([
+          { gate: 'lint', status: 'fail', command: 'lint', exit_code: 1, output: 'boom', duration_ms: 1 },
+        ]),
+      };
+      const config = makeMockConfig();
+      const configHook: ForgeConfig = {
+        ...config,
+        git: { ...config.git, hooks: { on_task_failed: hookPath } },
+      };
+
+      const orch = new ForgeOrchestrator({
+        config: configHook,
+        git,
+        state,
+        verifier,
+        planner,
+        logger,
+      });
+
+      await orch.executeGoal('Ship feature');
+
+      // The orchestrator must have logged that it was invoking the hook.
+      const runningHookCall = infoSpy.mock.calls.find(
+        (c) => c[0] === 'Running hook' &&
+          (c[1] as Record<string, unknown> | undefined)?.kind === 'on_task_failed'
+      );
+      expect(runningHookCall).toBeDefined();
+
+      // Sentinel file should exist and contain the failure-only env vars.
+      const captured = await readFile(sentinel, 'utf-8');
+      expect(captured).toMatch(/PI_FORGE_TASK_ID=t1/);
+      expect(captured).toMatch(/PI_FORGE_FAILED_GATES=lint/);
+      expect(captured).toMatch(/PI_FORGE_TAG_REF=refs\/forge\/failed\//);
+      expect(captured).toMatch(/PI_FORGE_FAILURE_REASON=/);
+      expect(captured).toMatch(/PI_FORGE_GOAL_ID=/);
+      expect(captured).toMatch(/PI_FORGE_BRANCH=/);
+      expect(captured).toMatch(/PI_FORGE_WORKTREE=/);
+      expect(captured).toMatch(/PI_FORGE_TIMESTAMP=/);
+    } finally {
+      delete process.env.SENTINEL;
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('on_task_failed hook is NOT invoked when no hook is configured', async () => {
+    const infoSpy = jest.fn();
+    const logger: Logger = {
+      info: infoSpy,
+      warn: jest.fn(),
+      error: jest.fn(),
+      debug: jest.fn(),
+    };
+
+    const git = makeMockGit();
+    const state = makeMockState();
+    const planner = makeMockPlanner();
+    const verifier: VerifierPort = {
+      ...makeMockVerifier(),
+      runAllGates: jest.fn<VerifierPort['runAllGates']>().mockResolvedValue([
+        { gate: 'lint', status: 'fail', command: 'lint', exit_code: 1, output: 'boom', duration_ms: 1 },
+      ]),
+    };
+
+    // makeMockConfig defaults git.hooks to {} (no hooks configured).
+    const orch = new ForgeOrchestrator({
+      config: makeMockConfig(),
+      git,
+      state,
+      verifier,
+      planner,
+      logger,
+    });
+
+    await orch.executeGoal('Ship feature');
+
+    const runningHookCall = infoSpy.mock.calls.find((c) => c[0] === 'Running hook');
+    expect(runningHookCall).toBeUndefined();
+  });
+
+  it('on_task_completed hook is invoked with PI_FORGE_COMMIT_SHA after success', async () => {
+    const tmp = await mkdtemp(join(tmpdir(), 'pi-forge-hook-success-'));
+    try {
+      const sentinel = join(tmp, 'env.out');
+      const hookPath = join(tmp, 'on-success.sh');
+      await writeFile(
+        hookPath,
+        '#!/bin/sh\n' +
+          'env | grep ^PI_FORGE_ > "$SENTINEL"\n',
+        'utf-8',
+      );
+      await chmod(hookPath, 0o755);
+      process.env.SENTINEL = sentinel;
+
+      const infoSpy = jest.fn();
+      const logger: Logger = {
+        info: infoSpy,
+        warn: jest.fn(),
+        error: jest.fn(),
+        debug: jest.fn(),
+      };
+
+      const git = makeMockGit();
+      (git.commit as jest.Mock<GitPort['commit']>).mockResolvedValue('deadbeef');
+      const state = makeMockState();
+      const planner = makeMockPlanner();
+      const verifier = makeMockVerifier();
+      const config = makeMockConfig();
+      const configHook: ForgeConfig = {
+        ...config,
+        git: { ...config.git, hooks: { on_task_completed: hookPath } },
+      };
+
+      const orch = new ForgeOrchestrator({
+        config: configHook,
+        git,
+        state,
+        verifier,
+        planner,
+        logger,
+      });
+
+      const ledger = await orch.executeGoal('Ship feature');
+      expect(ledger.summary?.final_status).toBe('success');
+
+      const runningHookCall = infoSpy.mock.calls.find(
+        (c) => c[0] === 'Running hook' &&
+          (c[1] as Record<string, unknown> | undefined)?.kind === 'on_task_completed'
+      );
+      expect(runningHookCall).toBeDefined();
+
+      const captured = await readFile(sentinel, 'utf-8');
+      expect(captured).toMatch(/PI_FORGE_TASK_ID=t1/);
+      expect(captured).toMatch(/PI_FORGE_COMMIT_SHA=deadbeef/);
+      expect(captured).toMatch(/PI_FORGE_DURATION_SECONDS=/);
+      expect(captured).toMatch(/PI_FORGE_BRANCH=/);
+      expect(captured).toMatch(/PI_FORGE_WORKTREE=/);
+      expect(captured).toMatch(/PI_FORGE_TIMESTAMP=/);
+    } finally {
+      delete process.env.SENTINEL;
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('hook failure does not abort the run', async () => {
+    // Point on_task_failed at a path that does not exist. spawn with
+    // shell: true returns exit code 127 from the shell, which the
+    // orchestrator must log as a warning and continue — never throw.
+    const warnSpy = jest.fn();
+    const logger: Logger = {
+      info: jest.fn(),
+      warn: warnSpy,
+      error: jest.fn(),
+      debug: jest.fn(),
+    };
+
+    const git = makeMockGit();
+    const state = makeMockState();
+    const planner = makeMockPlanner();
+    const verifier: VerifierPort = {
+      ...makeMockVerifier(),
+      runAllGates: jest.fn<VerifierPort['runAllGates']>().mockResolvedValue([
+        { gate: 'lint', status: 'fail', command: 'lint', exit_code: 1, output: 'boom', duration_ms: 1 },
+      ]),
+    };
+    const config = makeMockConfig();
+    const configHook: ForgeConfig = {
+      ...config,
+      git: {
+        ...config.git,
+        hooks: { on_task_failed: '/nonexistent/path/that/does/not/exist-xyz.sh' },
+      },
+    };
+
+    const orch = new ForgeOrchestrator({
+      config: configHook,
+      git,
+      state,
+      verifier,
+      planner,
+      logger,
+    });
+
+    // Must not throw — the orchestrator should swallow the hook failure
+    // and still finalize the ledger with the task marked as failed.
+    const ledger = await orch.executeGoal('Ship feature');
+    expect(ledger.summary?.tasks_failed).toBeGreaterThanOrEqual(1);
+
+    // The hook should have produced a 'Hook exited non-zero' warning
+    // (shell exit 127 for command-not-found). The run continued past it.
+    const hookWarning = warnSpy.mock.calls.find(
+      (c) => c[0] === 'Hook exited non-zero' || c[0] === 'Hook spawn failed'
+    );
+    expect(hookWarning).toBeDefined();
   });
 });

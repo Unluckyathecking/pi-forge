@@ -16,6 +16,7 @@ import type {
 } from './types.js';
 import { OrchestratorError } from './errors.js';
 import { createHash } from 'node:crypto';
+import { spawn } from 'node:child_process';
 import { join as joinPath } from 'node:path';
 import { writeFile } from 'node:fs/promises';
 import type { GitPort, WorktreeInfo } from '../ports/git.js';
@@ -368,21 +369,39 @@ export class ForgeOrchestrator {
       const effectiveBehavior: ForgeConfig['git']['failed_task_behavior'] =
         this.config.git.preserve_worktree_on_failure ? 'preserve' : this.config.git.failed_task_behavior;
 
-      if (effectiveBehavior === 'preserve' || effectiveBehavior === 'tag-and-purge') {
-        await this.preserveFailedTask({
-          task,
-          worktree,
-          artifact,
-          gateResults,
-          failedGates,
-          effectiveBehavior,
-        });
-      } else {
+      const preservation: { commitSha: string; preservedPath: string | undefined } =
+        (effectiveBehavior === 'preserve' || effectiveBehavior === 'tag-and-purge')
+          ? await this.preserveFailedTask({
+              task,
+              worktree,
+              artifact,
+              gateResults,
+              failedGates,
+              effectiveBehavior,
+            })
+          : { commitSha: '', preservedPath: undefined };
+
+      if (effectiveBehavior !== 'preserve' && effectiveBehavior !== 'tag-and-purge') {
         // 'purge' — legacy default, unchanged behaviour
         if (this.config.git.auto_clean_worktrees) {
           await this.git.destroyWorktree(worktree.path, !this.config.git.retain_failed_branches);
         }
       }
+
+      // Phase 5: fire the operator-defined failure hook AFTER the lifecycle
+      // event (preservation / purge) has settled. Fires for ALL failures
+      // — operators want the signal regardless of preservation behaviour.
+      await this.runHook('on_task_failed', {
+        PI_FORGE_TASK_ID: task.id,
+        PI_FORGE_GOAL_ID: this.currentGoalId ?? '',
+        PI_FORGE_BRANCH: task.branch ?? worktree.branch,
+        PI_FORGE_WORKTREE: preservation.preservedPath ?? worktree.path,
+        PI_FORGE_TIMESTAMP: new Date().toISOString(),
+        PI_FORGE_FAILED_GATES: failedGates.map((g) => g.gate).join(','),
+        PI_FORGE_TAG_REF: `refs/forge/failed/${this.currentGoalId ?? 'unknown'}/${task.id}`,
+        PI_FORGE_COMMIT_SHA: preservation.commitSha,
+        PI_FORGE_FAILURE_REASON: failureReason,
+      });
 
       // Throw instead of returning undefined so executeTask catches it and
       // writes an enriched task_failed ledger entry. Previously, returning
@@ -446,6 +465,20 @@ export class ForgeOrchestrator {
     task.completed_at = formatDate();
     task.evidence_id = artifact.artifact_id;
 
+    // Phase 5: fire the operator-defined success hook AFTER the artifact
+    // is durably persisted. Awaited so a downstream Slack-notify or
+    // CI-trigger hook completes before the lifecycle log entry lands.
+    const durationSeconds = artifact.summary?.duration_seconds ?? 0;
+    await this.runHook('on_task_completed', {
+      PI_FORGE_TASK_ID: task.id,
+      PI_FORGE_GOAL_ID: this.currentGoalId ?? '',
+      PI_FORGE_BRANCH: task.branch ?? worktree.branch,
+      PI_FORGE_WORKTREE: worktree.path,
+      PI_FORGE_TIMESTAMP: new Date().toISOString(),
+      PI_FORGE_COMMIT_SHA: commitSha,
+      PI_FORGE_DURATION_SECONDS: String(durationSeconds),
+    });
+
     return artifact;
   }
 
@@ -474,7 +507,7 @@ export class ForgeOrchestrator {
     gateResults: GateResult[];
     failedGates: GateResult[];
     effectiveBehavior: 'preserve' | 'tag-and-purge';
-  }): Promise<void> {
+  }): Promise<{ commitSha: string; preservedPath: string | undefined }> {
     const { task, worktree, artifact, gateResults, failedGates, effectiveBehavior } = args;
     if (!this.currentGoalId) {
       throw new OrchestratorError('No active goal during preservation', 'NO_ACTIVE_GOAL');
@@ -616,6 +649,51 @@ export class ForgeOrchestrator {
       sha: commitSha !== '' ? commitSha.substring(0, 8) : undefined,
       inspect: marker.operator_commands.inspect,
       salvage: marker.operator_commands.salvage,
+    });
+
+    return { commitSha, preservedPath };
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Hooks (Phase 5)
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Spawn an operator-defined shell-script hook with the given env vars.
+   * Best-effort: hook spawn errors and non-zero exit codes are logged as
+   * warnings but never propagate. Awaited so lifecycle log entries land
+   * after the hook completes (useful for Slack/PagerDuty ordering).
+   */
+  private async runHook(
+    kind: 'on_task_failed' | 'on_task_completed',
+    env: Record<string, string>,
+  ): Promise<void> {
+    const hookPath = this.config.git.hooks?.[kind];
+    if (hookPath === undefined || hookPath === '') return;
+
+    this.logger.info('Running hook', { kind, hookPath });
+    return new Promise<void>((resolve) => {
+      const proc = spawn(hookPath, [], {
+        env: { ...process.env, ...env },
+        shell: true,
+        stdio: 'inherit',
+      });
+      proc.on('exit', (code) => {
+        if (code !== 0) {
+          this.logger.warn('Hook exited non-zero', { kind, hookPath, exitCode: code });
+        } else {
+          this.logger.info('Hook completed', { kind, hookPath });
+        }
+        resolve();
+      });
+      proc.on('error', (err) => {
+        this.logger.warn('Hook spawn failed', {
+          kind,
+          hookPath,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        resolve();
+      });
     });
   }
 
