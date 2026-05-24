@@ -30,6 +30,8 @@ function makeMockConfig(): ForgeConfig {
       auto_clean_worktrees: true,
       retain_failed_branches: false,
       preserve_worktree_on_failure: false,
+      failed_task_behavior: 'purge',
+      failed_worktree_suffix: '.failed',
       archive_after_days: 7,
       commit: { require_conventional_commits: true, include_task_id: true, include_evidence_summary: true, max_commit_size_lines: 500 },
       merge: { strategy: 'rebase', require_linear_history: true, squash_on_merge: false },
@@ -61,6 +63,10 @@ function makeMockGit(): GitPort {
     hasConflicts: jest.fn<GitPort['hasConflicts']>().mockResolvedValue(false),
     abortMerge: jest.fn<GitPort['abortMerge']>().mockResolvedValue(undefined),
     isDirty: jest.fn<GitPort['isDirty']>().mockResolvedValue(false),
+    moveWorktree: jest.fn<GitPort['moveWorktree']>().mockImplementation(async (_from, to) => to),
+    updateRef: jest.fn<GitPort['updateRef']>().mockResolvedValue(undefined),
+    deleteRef: jest.fn<GitPort['deleteRef']>().mockResolvedValue(undefined),
+    listRefs: jest.fn<GitPort['listRefs']>().mockResolvedValue([]),
     health: jest.fn<GitPort['health']>().mockResolvedValue({ ok: true }),
   };
 }
@@ -93,6 +99,10 @@ function makeMockState(): StatePort {
     saveCheckpoint: jest.fn<StatePort['saveCheckpoint']>().mockResolvedValue(undefined),
     loadCheckpoint: jest.fn<StatePort['loadCheckpoint']>().mockResolvedValue(undefined),
     listCheckpoints: jest.fn<StatePort['listCheckpoints']>().mockResolvedValue([]),
+    saveFailedMarker: jest.fn<StatePort['saveFailedMarker']>().mockResolvedValue(undefined),
+    loadFailedMarker: jest.fn<StatePort['loadFailedMarker']>().mockResolvedValue(undefined),
+    listFailedMarkers: jest.fn<StatePort['listFailedMarkers']>().mockResolvedValue([]),
+    deleteFailedMarker: jest.fn<StatePort['deleteFailedMarker']>().mockResolvedValue(undefined),
     health: jest.fn<StatePort['health']>().mockResolvedValue({ ok: true }),
   };
 }
@@ -538,5 +548,180 @@ describe('ForgeOrchestrator', () => {
     await orch.executeGoal('Ship feature');
 
     expect(git.destroyWorktree).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserveFailedTask with behavior=preserve: moveWorktree + saveFailedMarker called', async () => {
+    const git = makeMockGit();
+    const state = makeMockState();
+    const planner = makeMockPlanner();
+    const verifier: VerifierPort = {
+      ...makeMockVerifier(),
+      runAllGates: jest.fn<VerifierPort['runAllGates']>().mockResolvedValue([
+        { gate: 'lint', status: 'fail', command: 'lint', exit_code: 1, output: 'boom', duration_ms: 1 },
+      ]),
+    };
+    const config = makeMockConfig();
+    const configPreserve: ForgeConfig = {
+      ...config,
+      git: { ...config.git, failed_task_behavior: 'preserve' },
+    };
+
+    const orch = new ForgeOrchestrator({
+      config: configPreserve,
+      git,
+      state,
+      verifier,
+      planner,
+      logger: mockLogger,
+    });
+
+    await orch.executeGoal('Ship feature');
+
+    const moveCalls = (git.moveWorktree as jest.Mock<GitPort['moveWorktree']>).mock.calls;
+    expect(moveCalls.length).toBe(1);
+    const [fromPath, toPath] = moveCalls[0];
+    expect(toPath).toBe(`${fromPath}.failed`);
+
+    const markerCalls = (state.saveFailedMarker as jest.Mock<StatePort['saveFailedMarker']>).mock.calls;
+    expect(markerCalls.length).toBe(1);
+    const marker = markerCalls[0][0];
+    // marker.task_id matches the planner's single task id `t1`
+    expect(marker.task_id).toBe('t1');
+    expect(marker.tag_ref).toMatch(/^refs\/forge\/failed\//);
+
+    // destroyWorktree must NOT be called on the preserve path.
+    expect(git.destroyWorktree).not.toHaveBeenCalled();
+  });
+
+  it('preserveFailedTask with behavior=tag-and-purge: destroyWorktree called, marker still saved', async () => {
+    const git = makeMockGit();
+    const state = makeMockState();
+    const planner = makeMockPlanner();
+    const verifier: VerifierPort = {
+      ...makeMockVerifier(),
+      runAllGates: jest.fn<VerifierPort['runAllGates']>().mockResolvedValue([
+        { gate: 'lint', status: 'fail', command: 'lint', exit_code: 1, output: 'boom', duration_ms: 1 },
+      ]),
+    };
+    const config = makeMockConfig();
+    const configTagPurge: ForgeConfig = {
+      ...config,
+      git: { ...config.git, failed_task_behavior: 'tag-and-purge' },
+    };
+
+    const orch = new ForgeOrchestrator({
+      config: configTagPurge,
+      git,
+      state,
+      verifier,
+      planner,
+      logger: mockLogger,
+    });
+
+    await orch.executeGoal('Ship feature');
+
+    expect(git.destroyWorktree).toHaveBeenCalledTimes(1);
+    expect(state.saveFailedMarker).toHaveBeenCalledTimes(1);
+    expect(git.moveWorktree).not.toHaveBeenCalled();
+  });
+
+  it('preserveFailedTask with behavior=purge: legacy path — no marker saved', async () => {
+    const git = makeMockGit();
+    const state = makeMockState();
+    const planner = makeMockPlanner();
+    const verifier: VerifierPort = {
+      ...makeMockVerifier(),
+      runAllGates: jest.fn<VerifierPort['runAllGates']>().mockResolvedValue([
+        { gate: 'lint', status: 'fail', command: 'lint', exit_code: 1, output: 'boom', duration_ms: 1 },
+      ]),
+    };
+
+    // makeMockConfig() defaults failed_task_behavior: 'purge'.
+    const orch = new ForgeOrchestrator({
+      config: makeMockConfig(),
+      git,
+      state,
+      verifier,
+      planner,
+      logger: mockLogger,
+    });
+
+    await orch.executeGoal('Ship feature');
+
+    expect(git.destroyWorktree).toHaveBeenCalledTimes(1);
+    expect(state.saveFailedMarker).not.toHaveBeenCalled();
+    expect(git.updateRef).not.toHaveBeenCalled();
+    expect(git.moveWorktree).not.toHaveBeenCalled();
+  });
+
+  it("preserve_worktree_on_failure=true forces 'preserve' behaviour regardless of failed_task_behavior", async () => {
+    const git = makeMockGit();
+    const state = makeMockState();
+    const planner = makeMockPlanner();
+    const verifier: VerifierPort = {
+      ...makeMockVerifier(),
+      runAllGates: jest.fn<VerifierPort['runAllGates']>().mockResolvedValue([
+        { gate: 'lint', status: 'fail', command: 'lint', exit_code: 1, output: 'boom', duration_ms: 1 },
+      ]),
+    };
+    const config = makeMockConfig();
+    const configShorthand: ForgeConfig = {
+      ...config,
+      git: {
+        ...config.git,
+        failed_task_behavior: 'purge',
+        preserve_worktree_on_failure: true,
+      },
+    };
+
+    const orch = new ForgeOrchestrator({
+      config: configShorthand,
+      git,
+      state,
+      verifier,
+      planner,
+      logger: mockLogger,
+    });
+
+    await orch.executeGoal('Ship feature');
+
+    expect(git.moveWorktree).toHaveBeenCalledTimes(1);
+    expect(state.saveFailedMarker).toHaveBeenCalledTimes(1);
+    expect(git.destroyWorktree).not.toHaveBeenCalled();
+  });
+
+  it('commit failure does not block preservation', async () => {
+    const git = makeMockGit();
+    (git.commit as jest.Mock<GitPort['commit']>).mockRejectedValue(new Error('commit refused'));
+    const state = makeMockState();
+    const planner = makeMockPlanner();
+    const verifier: VerifierPort = {
+      ...makeMockVerifier(),
+      runAllGates: jest.fn<VerifierPort['runAllGates']>().mockResolvedValue([
+        { gate: 'lint', status: 'fail', command: 'lint', exit_code: 1, output: 'boom', duration_ms: 1 },
+      ]),
+    };
+    const config = makeMockConfig();
+    const configPreserve: ForgeConfig = {
+      ...config,
+      git: { ...config.git, failed_task_behavior: 'preserve' },
+    };
+
+    const orch = new ForgeOrchestrator({
+      config: configPreserve,
+      git,
+      state,
+      verifier,
+      planner,
+      logger: mockLogger,
+    });
+
+    await orch.executeGoal('Ship feature');
+
+    expect(git.moveWorktree).toHaveBeenCalledTimes(1);
+    expect(state.saveFailedMarker).toHaveBeenCalledTimes(1);
+    const markerCalls = (state.saveFailedMarker as jest.Mock<StatePort['saveFailedMarker']>).mock.calls;
+    const marker = markerCalls[0][0];
+    expect(marker.commit_sha).toBe('');
   });
 });

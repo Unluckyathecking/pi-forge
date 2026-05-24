@@ -12,13 +12,15 @@ import type {
   EvidenceEntry,
   StateCheckpoint,
   ForgeConfig,
+  FailedTaskMarker,
 } from './types.js';
 import { OrchestratorError } from './errors.js';
 import { createHash } from 'node:crypto';
 import { join as joinPath } from 'node:path';
-import type { GitPort } from '../ports/git.js';
+import { writeFile } from 'node:fs/promises';
+import type { GitPort, WorktreeInfo } from '../ports/git.js';
 import type { StatePort } from '../ports/state.js';
-import type { VerifierPort } from '../ports/verifier.js';
+import type { VerifierPort, GateResult } from '../ports/verifier.js';
 import type { PlannerPort } from '../ports/planner.js';
 import type { WorkerPort } from '../ports/worker.js';
 import type { Logger } from '../utils/logger.js';
@@ -354,18 +356,25 @@ export class ForgeOrchestrator {
       // so failure diagnostics survive even if cleanup later throws.
       await this.state.saveProofArtifact(this.currentGoalId, artifact);
 
-      // Cleanup is now gated on BOTH auto_clean_worktrees AND the new
-      // preserve_worktree_on_failure flag (set from --keep-on-fail or
-      // config.yaml). When preserved, log clearly so the operator
-      // knows where the dirty worktree lives.
-      if (this.config.git.auto_clean_worktrees && !this.config.git.preserve_worktree_on_failure) {
-        await this.git.destroyWorktree(worktree.path, !this.config.git.retain_failed_branches);
-      } else if (this.config.git.preserve_worktree_on_failure) {
-        this.logger.info('Worktree preserved on failure', {
-          taskId: task.id,
-          worktree: worktree.path,
-          branch: worktree.branch,
+      // === Cleanup / preservation decision (Phase 2) ===
+      // preserve_worktree_on_failure: true is shorthand for failed_task_behavior: 'preserve'
+      const effectiveBehavior: ForgeConfig['git']['failed_task_behavior'] =
+        this.config.git.preserve_worktree_on_failure ? 'preserve' : this.config.git.failed_task_behavior;
+
+      if (effectiveBehavior === 'preserve' || effectiveBehavior === 'tag-and-purge') {
+        await this.preserveFailedTask({
+          task,
+          worktree,
+          artifact,
+          gateResults,
+          failedGates,
+          effectiveBehavior,
         });
+      } else {
+        // 'purge' — legacy default, unchanged behaviour
+        if (this.config.git.auto_clean_worktrees) {
+          await this.git.destroyWorktree(worktree.path, !this.config.git.retain_failed_branches);
+        }
       }
 
       // Throw instead of returning undefined so executeTask catches it and
@@ -431,6 +440,158 @@ export class ForgeOrchestrator {
     task.evidence_id = artifact.artifact_id;
 
     return artifact;
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Failure Preservation (Phase 2)
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Execute the 6-step failed-task preservation flow when
+   * git.failed_task_behavior is 'preserve' or 'tag-and-purge'.
+   *
+   * Each step is wrapped so a failure in one (e.g. updateRef on a stale ref)
+   * doesn't abort the others — preservation is best-effort by design.
+   *
+   *   1. Commit dirty worker state with `wip(<task>): preserved on <gate> failure`
+   *   2. Tag the SHA at refs/forge/failed/<goal>/<task> so it survives branch deletion
+   *   3. preserve → moveWorktree to <path><suffix> | tag-and-purge → destroyWorktree
+   *   4. Build + save FailedTaskMarker to the central index
+   *   5. Write in-tree .pi-failed.json sidecar inside the preserved worktree
+   *   6. Emit operator-facing 'Task failure preserved' log
+   */
+  private async preserveFailedTask(args: {
+    task: Task;
+    worktree: WorktreeInfo;
+    artifact: ProofArtifact;
+    gateResults: GateResult[];
+    failedGates: GateResult[];
+    effectiveBehavior: 'preserve' | 'tag-and-purge';
+  }): Promise<void> {
+    const { task, worktree, artifact, gateResults, failedGates, effectiveBehavior } = args;
+    if (!this.currentGoalId) {
+      throw new OrchestratorError('No active goal during preservation', 'NO_ACTIVE_GOAL');
+    }
+
+    // 1. Commit dirty state. git.commit already handles "nothing to commit" gracefully
+    //    (returns HEAD sha when there's nothing to stage). Catch failures so
+    //    preservation can still proceed with whatever we have.
+    const wipReason = failedGates.length > 0
+      ? failedGates.map((g) => g.gate).join(',')
+      : 'risk_auto_deny';
+    const wipMsg = `wip(${task.id}): preserved on ${wipReason} failure`;
+    let commitSha = '';
+    let wipWasEmpty = false;
+    try {
+      const wasDirty = await this.git.isDirty(worktree.path);
+      commitSha = await this.git.commit(worktree.path, wipMsg, { all: true });
+      wipWasEmpty = !wasDirty;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn('preserveFailedTask: commit failed; continuing without SHA', {
+        taskId: task.id, error: message,
+      });
+    }
+
+    // 2. Tag the SHA at refs/forge/failed/<goal>/<task> so it survives branch deletion.
+    const tagRef = `refs/forge/failed/${this.currentGoalId}/${task.id}`;
+    if (commitSha !== '') {
+      try {
+        await this.git.updateRef(tagRef, commitSha);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.warn('preserveFailedTask: updateRef failed; tag not created', {
+          taskId: task.id, tagRef, error: message,
+        });
+      }
+    }
+
+    // 3. Decide preserve (rename) vs tag-and-purge (destroy).
+    let preservedPath: string | undefined;
+    if (effectiveBehavior === 'preserve') {
+      const target = `${worktree.path}${this.config.git.failed_worktree_suffix}`;
+      try {
+        preservedPath = await this.git.moveWorktree(worktree.path, target);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.warn('preserveFailedTask: moveWorktree failed; leaving worktree in place', {
+          taskId: task.id, target, error: message,
+        });
+        preservedPath = worktree.path;
+      }
+    } else {
+      // tag-and-purge — destroy the worktree, the tag preserves the SHA.
+      if (this.config.git.auto_clean_worktrees) {
+        try {
+          await this.git.destroyWorktree(worktree.path, !this.config.git.retain_failed_branches);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          this.logger.warn('preserveFailedTask: destroyWorktree failed during tag-and-purge', {
+            taskId: task.id, error: message,
+          });
+        }
+      }
+    }
+
+    // 4. Build + save the FailedTaskMarker (central index).
+    const marker: FailedTaskMarker = {
+      task_id: task.id,
+      goal_id: this.currentGoalId,
+      failed_at: formatDate(),
+      failure_kind: 'gate_failure',
+      branch: task.branch ?? worktree.branch,
+      tag_ref: tagRef,
+      commit_sha: commitSha,
+      wip_commit_was_empty: wipWasEmpty,
+      worktree_path: preservedPath,
+      gates: gateResults.map((g) => ({
+        name: g.gate,
+        status: g.status,
+        exit_code: g.exit_code,
+        stderr_first_line: g.output.split('\n').find((l) => l.trim().length > 0)?.substring(0, 200),
+      })),
+      files_modified: [],   // populated below if we can diff
+      lines_added: artifact.summary?.lines_added ?? 0,
+      lines_removed: artifact.summary?.lines_removed ?? 0,
+      recovery_hint: preservedPath
+        ? `cd ${preservedPath} && git status; jq '.gates' .pi-failed.json`
+        : `git checkout ${tagRef}  # then inspect`,
+      operator_commands: {
+        inspect: `pi-forge inspect ${task.id}`,
+        salvage: `pi-forge salvage ${task.id} --to-branch <name>`,
+        retry: `pi-forge retry ${task.id}`,
+        purge: `pi-forge cleanup --task ${task.id}`,
+      },
+    };
+    try {
+      await this.state.saveFailedMarker(marker);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn('preserveFailedTask: saveFailedMarker failed', { taskId: task.id, error: message });
+    }
+
+    // 5. Write in-tree .pi-failed.json sidecar inside the preserved worktree.
+    //    Best-effort: failure here is logged but not fatal.
+    if (preservedPath !== undefined) {
+      try {
+        await writeFile(joinPath(preservedPath, '.pi-failed.json'), JSON.stringify(marker, null, 2), 'utf-8');
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.warn('preserveFailedTask: sidecar write failed', { taskId: task.id, error: message });
+      }
+    }
+
+    // 6. Operator-facing summary log.
+    this.logger.error('Task failure preserved', {
+      taskId: task.id,
+      behavior: effectiveBehavior,
+      worktree: preservedPath,
+      branch: task.branch ?? worktree.branch,
+      tag_ref: tagRef,
+      sha: commitSha !== '' ? commitSha.substring(0, 8) : undefined,
+      inspect: marker.operator_commands.inspect,
+      salvage: marker.operator_commands.salvage,
+    });
   }
 
   // ──────────────────────────────────────────────────────────────────────────
