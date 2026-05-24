@@ -67,6 +67,7 @@ git:
   worktree_base: ".pi/worktrees"
   auto_clean_worktrees: true
   retain_failed_branches: false
+  preserve_worktree_on_failure: false
   archive_after_days: 30
   commit:
     require_conventional_commits: true
@@ -211,7 +212,10 @@ const gateTypeSchema = z.enum([
   'manual_check',
 ]);
 
-const forgeConfigSchema: z.ZodType<ForgeConfig> = z.object({
+// Input is `unknown` (raw YAML) so we can use `.default()` on fields
+// like `git.preserve_worktree_on_failure` to make them optional in
+// legacy configs while keeping the output strictly typed as ForgeConfig.
+const forgeConfigSchema: z.ZodType<ForgeConfig, z.ZodTypeDef, unknown> = z.object({
   forge: z.object({
     version: z.string(),
     name: z.string(),
@@ -251,6 +255,9 @@ const forgeConfigSchema: z.ZodType<ForgeConfig> = z.object({
     worktree_base: z.string(),
     auto_clean_worktrees: z.boolean(),
     retain_failed_branches: z.boolean(),
+    // Default so v1.x configs (and the embedded default YAML before
+    // this change shipped) parse without errors.
+    preserve_worktree_on_failure: z.boolean().default(false),
     archive_after_days: z.number(),
     commit: z.object({
       require_conventional_commits: z.boolean(),

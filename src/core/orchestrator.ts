@@ -286,7 +286,12 @@ export class ForgeOrchestrator {
         g.status === 'warn'
     );
 
-    // 4. Build proof artifact
+    // 4. Build proof artifact. The `all_pass` and `failed_gates`
+    //    fields make the artifact self-describing — operators can
+    //    grep proofs/ for failures without re-deriving the predicate.
+    const failedGates = gateResults
+      .filter((g) => g.status === 'fail')
+      .map((g) => g.gate);
     const artifact: ProofArtifact = {
       artifact_id: generateId('proof'),
       task_id: task.id,
@@ -304,6 +309,8 @@ export class ForgeOrchestrator {
         timestamp: formatDate(),
         verifier: 'mechanical',
       })),
+      all_pass: allRequiredPass,
+      failed_gates: failedGates,
       summary: {
         files_changed: workerResult.filesChanged,
         lines_added: workerResult.linesAdded,
@@ -340,9 +347,25 @@ export class ForgeOrchestrator {
         risk_decision: risk.decision,
       });
 
-      // Clean up worktree on failure
-      if (this.config.git.auto_clean_worktrees) {
+      // Persist the artifact BEFORE deciding whether to clean up the
+      // worktree. The pre-fix orchestrator built the artifact and then
+      // threw it away — operators were left with an empty proofs/
+      // directory and no record of which gate failed. Save it first
+      // so failure diagnostics survive even if cleanup later throws.
+      await this.state.saveProofArtifact(this.currentGoalId, artifact);
+
+      // Cleanup is now gated on BOTH auto_clean_worktrees AND the new
+      // preserve_worktree_on_failure flag (set from --keep-on-fail or
+      // config.yaml). When preserved, log clearly so the operator
+      // knows where the dirty worktree lives.
+      if (this.config.git.auto_clean_worktrees && !this.config.git.preserve_worktree_on_failure) {
         await this.git.destroyWorktree(worktree.path, !this.config.git.retain_failed_branches);
+      } else if (this.config.git.preserve_worktree_on_failure) {
+        this.logger.info('Worktree preserved on failure', {
+          taskId: task.id,
+          worktree: worktree.path,
+          branch: worktree.branch,
+        });
       }
 
       // Throw instead of returning undefined so executeTask catches it and

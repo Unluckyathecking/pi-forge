@@ -29,6 +29,7 @@ function makeMockConfig(): ForgeConfig {
       worktree_base: '.pi/worktrees/',
       auto_clean_worktrees: true,
       retain_failed_branches: false,
+      preserve_worktree_on_failure: false,
       archive_after_days: 7,
       commit: { require_conventional_commits: true, include_task_id: true, include_evidence_summary: true, max_commit_size_lines: 500 },
       merge: { strategy: 'rebase', require_linear_history: true, squash_on_merge: false },
@@ -442,5 +443,100 @@ describe('ForgeOrchestrator', () => {
     const failedEntries = ledger.entries.filter((e) => e.type === 'task_failed');
     expect(failedEntries.length).toBeGreaterThanOrEqual(1);
     expect(failedEntries[0].description).toMatch(/commit/i);
+  });
+
+  it('executeTaskInternal persists proof artifact even when gates fail', async () => {
+    // Planner mock makes a task with required gate `lint`. A mixed
+    // pass/fail set means allRequiredPass is false, so we hit the
+    // failure branch — the regression we are fixing was that the
+    // artifact built in that branch was never persisted.
+    const git = makeMockGit();
+    const state = makeMockState();
+    const planner = makeMockPlanner();
+    const verifier: VerifierPort = {
+      ...makeMockVerifier(),
+      runAllGates: jest.fn<VerifierPort['runAllGates']>().mockResolvedValue([
+        { gate: 'lint', status: 'fail', command: 'lint', exit_code: 1, output: 'boom', duration_ms: 1 },
+        { gate: 'typecheck', status: 'pass', command: 'tsc', exit_code: 0, output: '', duration_ms: 1 },
+      ]),
+    };
+
+    const orch = new ForgeOrchestrator({
+      config: makeMockConfig(),
+      git,
+      state,
+      verifier,
+      planner,
+      logger: mockLogger,
+    });
+
+    await orch.executeGoal('Ship feature');
+
+    const saveCalls = (state.saveProofArtifact as jest.Mock<StatePort['saveProofArtifact']>).mock.calls;
+    expect(saveCalls.length).toBe(1);
+    const savedArtifact = saveCalls[0][1];
+    expect(savedArtifact.all_pass).toBe(false);
+    expect(savedArtifact.failed_gates).toEqual(expect.arrayContaining(['lint']));
+    expect(savedArtifact.failed_gates).not.toContain('typecheck');
+    // Sanity: the success-path commit step must not have run.
+    expect(git.commit).not.toHaveBeenCalled();
+  });
+
+  it('executeTaskInternal preserves worktree when preserve_worktree_on_failure is true', async () => {
+    const git = makeMockGit();
+    const state = makeMockState();
+    const planner = makeMockPlanner();
+    const verifier: VerifierPort = {
+      ...makeMockVerifier(),
+      runAllGates: jest.fn<VerifierPort['runAllGates']>().mockResolvedValue([
+        { gate: 'lint', status: 'fail', command: 'lint', exit_code: 1, output: 'boom', duration_ms: 1 },
+      ]),
+    };
+    const config = makeMockConfig();
+    const configWithPreserve: ForgeConfig = {
+      ...config,
+      git: { ...config.git, preserve_worktree_on_failure: true },
+    };
+
+    const orch = new ForgeOrchestrator({
+      config: configWithPreserve,
+      git,
+      state,
+      verifier,
+      planner,
+      logger: mockLogger,
+    });
+
+    await orch.executeGoal('Ship feature');
+
+    expect(git.destroyWorktree).not.toHaveBeenCalled();
+    // Artifact is still persisted on the failure path.
+    expect(state.saveProofArtifact).toHaveBeenCalledTimes(1);
+  });
+
+  it('executeTaskInternal still destroys worktree when preserve flag is false (default)', async () => {
+    const git = makeMockGit();
+    const state = makeMockState();
+    const planner = makeMockPlanner();
+    const verifier: VerifierPort = {
+      ...makeMockVerifier(),
+      runAllGates: jest.fn<VerifierPort['runAllGates']>().mockResolvedValue([
+        { gate: 'lint', status: 'fail', command: 'lint', exit_code: 1, output: 'boom', duration_ms: 1 },
+      ]),
+    };
+
+    // makeMockConfig() defaults preserve_worktree_on_failure: false
+    const orch = new ForgeOrchestrator({
+      config: makeMockConfig(),
+      git,
+      state,
+      verifier,
+      planner,
+      logger: mockLogger,
+    });
+
+    await orch.executeGoal('Ship feature');
+
+    expect(git.destroyWorktree).toHaveBeenCalledTimes(1);
   });
 });

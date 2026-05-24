@@ -115,6 +115,19 @@ export interface ProofArtifact {
   readonly worktree?: string;
   readonly commit_sha?: string;
   readonly claims: ProofClaim[];
+  /**
+   * True iff every required gate (per the task's proof_requirements)
+   * reported `pass` or `warn`. Written on both the success and failure
+   * paths so operators can grep failed artifacts without re-deriving
+   * the predicate. Optional for v1.x compatibility — older artifacts
+   * predate this field.
+   */
+  readonly all_pass?: boolean;
+  /**
+   * Names of gates whose status was `fail`. Empty on success. Optional
+   * for v1.x compatibility.
+   */
+  readonly failed_gates?: string[];
   readonly summary?: {
     readonly files_changed?: number;
     readonly lines_added?: number;
@@ -271,6 +284,13 @@ export interface ForgeConfig {
     readonly worktree_base: string;
     readonly auto_clean_worktrees: boolean;
     readonly retain_failed_branches: boolean;
+    /**
+     * When true, the failure path of executeTaskInternal skips
+     * destroyWorktree() so operators can inspect the dirty worktree
+     * for diagnosis or salvage. Overridable from the CLI via
+     * --keep-on-fail. Default false (preserve existing behaviour).
+     */
+    readonly preserve_worktree_on_failure: boolean;
     readonly archive_after_days: number;
     readonly commit: {
       readonly require_conventional_commits: boolean;

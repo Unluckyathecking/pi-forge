@@ -86,6 +86,10 @@ git:
   worktree_base: ".pi/worktrees/"
   auto_clean_worktrees: true
   retain_failed_branches: true
+  # When true, the orchestrator preserves the worktree on gate failure
+  # (skips destroyWorktree) so operators can inspect/recover. Default
+  # false. Overridable per-run from the CLI via --keep-on-fail.
+  preserve_worktree_on_failure: false
   archive_after_days: 7
   
   # Commit policy

@@ -38,6 +38,7 @@ interface ForgeCommandOptions {
   kimiKey?: string;
   model?: string;
   provider?: string;
+  keepOnFail?: boolean;
 }
 
 program
@@ -51,6 +52,7 @@ program
   .option('--kimi-key <key>', 'Kimi Coding API key (sk-kimi-…). Falls back to $KIMI_CODER_API_KEY, then to OAuth in ~/.pi/agent/auth.json.')
   .option('--model <id>', 'Model id within the provider (default: kimi-for-coding)')
   .option('--provider <name>', 'Provider name (default: kimi-coder)')
+  .option('--keep-on-fail', 'Preserve worktree on gate failure (overrides config)')
   .action(async (goal: string, options: ForgeCommandOptions) => {
     if (options.verbose === true) {
       process.env.LOG_LEVEL = 'debug';
@@ -58,7 +60,14 @@ program
 
     const spinner = ora('Loading configuration...').start();
     try {
-      const config = await loadConfig(options.config);
+      const loaded = await loadConfig(options.config);
+      // --keep-on-fail is a per-run override that always wins over
+      // config.yaml. Use an immutable spread so the cached config
+      // returned by getConfig() is not mutated as a side-effect.
+      const config: ForgeConfig =
+        options.keepOnFail === true
+          ? { ...loaded, git: { ...loaded.git, preserve_worktree_on_failure: true } }
+          : loaded;
       spinner.succeed('Configuration loaded');
 
       const git = new GitCliAdapter();
