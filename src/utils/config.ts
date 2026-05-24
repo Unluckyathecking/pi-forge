@@ -72,6 +72,8 @@ git:
   failed_task_behavior: "purge"
   # Suffix when renaming a failed worktree (used only with "preserve").
   failed_worktree_suffix: ".failed"
+  # Phase 5: operator-defined shell-script hooks. Empty {} disables.
+  hooks: {}
   archive_after_days: 30
   commit:
     require_conventional_commits: true
@@ -269,6 +271,12 @@ const forgeConfigSchema: z.ZodType<ForgeConfig, z.ZodTypeDef, unknown> = z.objec
     // Suffix appended when renaming a failed worktree (preserve mode only).
     // Collisions handled by the git adapter (appending `-<unix-ts>`).
     failed_worktree_suffix: z.string().default('.failed'),
+    // Phase 5: operator-defined shell-script hooks. Defaults to empty
+    // object so v1.x configs (without this block) continue to parse.
+    hooks: z.object({
+      on_task_failed: z.string().optional(),
+      on_task_completed: z.string().optional(),
+    }).default({}),
     archive_after_days: z.number(),
     commit: z.object({
       require_conventional_commits: z.boolean(),

@@ -310,6 +310,27 @@ export interface ForgeConfig {
      * are handled by the git adapter (appending `-<unix-ts>`).
      */
     readonly failed_worktree_suffix: string;
+    /**
+     * Operator-defined shell-script hooks. Each is a path (relative to
+     * cwd or absolute) to an executable. Failure of a hook is logged as
+     * a warning but never aborts pi-forge — hooks are pure observability /
+     * extension points.
+     *
+     * Available env vars passed to all hooks:
+     *   PI_FORGE_TASK_ID, PI_FORGE_GOAL_ID, PI_FORGE_BRANCH,
+     *   PI_FORGE_WORKTREE, PI_FORGE_TIMESTAMP
+     *
+     * Failure-only env vars (on_task_failed):
+     *   PI_FORGE_FAILED_GATES (comma-separated), PI_FORGE_TAG_REF,
+     *   PI_FORGE_COMMIT_SHA, PI_FORGE_FAILURE_REASON
+     *
+     * Success-only env vars (on_task_completed):
+     *   PI_FORGE_COMMIT_SHA, PI_FORGE_DURATION_SECONDS
+     */
+    readonly hooks: {
+      readonly on_task_failed?: string;
+      readonly on_task_completed?: string;
+    };
     readonly archive_after_days: number;
     readonly commit: {
       readonly require_conventional_commits: boolean;
