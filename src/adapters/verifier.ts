@@ -49,6 +49,27 @@ export class LocalCommandVerifier implements VerifierPort {
     }
 
     const command = await this.resolveCommand(gate);
+
+    // Detect no-op test scripts (e.g., echo + exit 0). When package.json's
+    // "test" script does no real work, treat the gate as "skip" rather than
+    // reporting a misleading "pass". Operators on visual/MVP projects often
+    // set this intentionally; this surface tells them the gate didn't gate.
+    if (gate === 'test') {
+      const noOp = await this.isNoOpTestScript();
+      if (noOp.detected) {
+        const skipped: GateResult = {
+          gate,
+          status: 'skip',
+          command,
+          exit_code: 0,
+          output: `Test gate skipped: package.json "test" script appears to be a no-op (${noOp.reason}). Set gates.mechanical.test.enabled: false in config.yaml to suppress this gate entirely.`,
+          duration_ms: 0,
+        };
+        this.lastGateResults.set(gate, skipped);
+        return skipped;
+      }
+    }
+
     const timeoutMs = (gateConfig.timeout_seconds ?? 300) * 1000;
     const start = Date.now();
 
@@ -283,6 +304,38 @@ export class LocalCommandVerifier implements VerifierPort {
         return `echo "Unknown gate: ${_exhaustive as string}"`;
       }
     }
+  }
+
+  private async isNoOpTestScript(): Promise<{ detected: boolean; reason: string }> {
+    const pkg = await this.loadPackageJson();
+    const script = pkg?.scripts?.test;
+    if (script == null || script === '') return { detected: false, reason: '' };
+
+    // Patterns that indicate a no-op:
+    // - "echo ... && exit 0" / "echo ... ; exit 0"
+    // - "exit 0" alone
+    // - "true" alone (bash builtin)
+    // - npm's default: 'echo "Error: no test specified" && exit 1' — that's NOT a
+    //   no-op (it exits 1) but ALSO not a useful test; treat as no-op so the
+    //   gate doesn't fail and confuse the operator
+    const trimmed = script.trim();
+
+    // npm's default unhelpful template — non-zero exit but no real test
+    if (/^echo\s+"?Error: no test specified"?\s*(&&|;)\s*exit\s+\d+\s*$/i.test(trimmed)) {
+      return { detected: true, reason: 'npm default "no test specified" template' };
+    }
+
+    // exit 0 patterns
+    if (/^(true|exit\s+0)\s*$/.test(trimmed)) {
+      return { detected: true, reason: 'script is "exit 0" or "true"' };
+    }
+
+    // echo ... [&&|;] exit 0
+    if (/^echo[^&;]*(&&|;)\s*exit\s+0\s*$/i.test(trimmed)) {
+      return { detected: true, reason: 'script is "echo ... && exit 0"' };
+    }
+
+    return { detected: false, reason: '' };
   }
 
   private async loadPackageJson(): Promise<PackageJson | null> {
