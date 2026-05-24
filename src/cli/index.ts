@@ -27,6 +27,7 @@ import type {
   EvidenceLedger,
   FailedTaskMarker,
   ForgeConfig,
+  TaskGraph,
 } from '../core/types.js';
 
 const PI_FORGE_VERSION = resolveVersion();
@@ -58,6 +59,11 @@ interface CleanupCommandOptions {
 
 interface SalvageCommandOptions {
   toBranch?: string;
+}
+
+interface StatsCommandOptions {
+  readonly goal?: string;
+  readonly last?: string;
 }
 
 program
@@ -450,6 +456,27 @@ program
       );
       if (finalWorktreePath !== undefined) {
         console.log(chalk.gray(`  worktree: ${finalWorktreePath}`));
+      }
+    } catch (err) {
+      handleError(err);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('stats')
+  .description('Show session statistics across all pi-forge goals')
+  .option('--goal <id>', 'Drill into a specific goal')
+  .option('--last <n>', 'Recent-goals limit (default 10)', '10')
+  .action(async (options: StatsCommandOptions) => {
+    try {
+      const state = new FilesystemStateAdapter();
+      await state.init('.pi/state');
+      if (options.goal !== undefined) {
+        await renderGoalStats(state, options.goal);
+      } else {
+        const last = parseInt(options.last ?? '10', 10);
+        await renderAggregateStats(state, isNaN(last) ? 10 : last);
       }
     } catch (err) {
       handleError(err);
@@ -907,4 +934,280 @@ export async function readWorktreeStats(
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// ── Helpers for `pi-forge stats` ──
+
+interface AggregateStatsDatum {
+  readonly goalId: string;
+  readonly ledger: EvidenceLedger;
+  readonly graph: TaskGraph;
+}
+
+/**
+ * Render the cross-goal aggregate view for `pi-forge stats`. Reads every
+ * task graph + evidence ledger under `.pi/state/`, then aggregates goal
+ * outcomes, task outcomes, task durations, most-common failed gates (from
+ * proof artifacts) and the recent-goals tail.
+ */
+export async function renderAggregateStats(
+  state: FilesystemStateAdapter,
+  last: number,
+): Promise<void> {
+  const goalIds = await state.listTaskGraphs();
+  if (goalIds.length === 0) {
+    console.log(chalk.gray('No pi-forge runs found in .pi/state/evidence/.'));
+    return;
+  }
+
+  // Load all ledgers + task graphs (skip ones we can't load).
+  const data: AggregateStatsDatum[] = [];
+  for (const gid of goalIds) {
+    const ledger = await state.loadEvidenceLedger(gid);
+    const graph = await state.loadTaskGraph(gid);
+    if (ledger && graph) data.push({ goalId: gid, ledger, graph });
+  }
+
+  // Aggregate goal-level outcomes.
+  const goalStatus = { success: 0, partial: 0, failure: 0, unfinished: 0 };
+  for (const { ledger } of data) {
+    const status = ledger.summary?.final_status;
+    if (status === 'success') goalStatus.success++;
+    else if (status === 'partial') goalStatus.partial++;
+    else if (status === 'failure') goalStatus.failure++;
+    else goalStatus.unfinished++;
+  }
+
+  // Aggregate task-level outcomes.
+  let taskTotal = 0;
+  let taskCompleted = 0;
+  let taskFailed = 0;
+  let taskUnfinished = 0;
+  for (const { graph, ledger } of data) {
+    taskTotal += graph.tasks.length;
+    const completed = new Set<string>();
+    const failed = new Set<string>();
+    for (const e of ledger.entries) {
+      if (e.task_id !== undefined) {
+        if (e.type === 'task_completed') completed.add(e.task_id);
+        else if (e.type === 'task_failed') failed.add(e.task_id);
+      }
+    }
+    taskCompleted += completed.size;
+    taskFailed += failed.size;
+    taskUnfinished += graph.tasks.length - completed.size - failed.size;
+  }
+
+  // Task durations (from task_started → task_completed/_failed pairs).
+  const durationsMs: number[] = [];
+  for (const { ledger } of data) {
+    const starts = new Map<string, number>();
+    for (const e of ledger.entries) {
+      if (e.task_id === undefined) continue;
+      if (e.type === 'task_started') {
+        starts.set(e.task_id, Date.parse(e.timestamp));
+      } else if (e.type === 'task_completed' || e.type === 'task_failed') {
+        const start = starts.get(e.task_id);
+        if (start !== undefined) {
+          durationsMs.push(Date.parse(e.timestamp) - start);
+          starts.delete(e.task_id);
+        }
+      }
+    }
+  }
+  const avgMs =
+    durationsMs.length > 0
+      ? durationsMs.reduce((a, b) => a + b, 0) / durationsMs.length
+      : 0;
+  const sortedDurations = [...durationsMs].sort((a, b) => a - b);
+  const medianMs =
+    sortedDurations.length > 0
+      ? sortedDurations[Math.floor(sortedDurations.length / 2)]
+      : 0;
+
+  // Most-common failed gates from failure proofs.
+  const failedGateCounts = new Map<string, number>();
+  for (const { goalId } of data) {
+    const proofIds = await state.listProofArtifacts(goalId);
+    for (const pid of proofIds) {
+      const proof = await state.loadProofArtifact(goalId, pid);
+      if (proof?.all_pass === false && proof.failed_gates) {
+        for (const g of proof.failed_gates) {
+          failedGateCounts.set(g, (failedGateCounts.get(g) ?? 0) + 1);
+        }
+      }
+    }
+  }
+
+  // Recent goals.
+  const recent = [...data]
+    .sort((a, b) => b.ledger.created_at.localeCompare(a.ledger.created_at))
+    .slice(0, last);
+
+  // ── Render ──
+  const total = data.length;
+  const pct = (n: number): number => (total > 0 ? Math.round((n / total) * 100) : 0);
+  console.log(chalk.bold('Pi Forge — session statistics\n'));
+  console.log(`Goals:                ${chalk.bold(total)} total`);
+  console.log(
+    `  ${chalk.green('✓ success')}           ${String(goalStatus.success).padStart(3)} (${pct(goalStatus.success)}%)`,
+  );
+  console.log(
+    `  ${chalk.yellow('⚠ partial')}           ${String(goalStatus.partial).padStart(3)} (${pct(goalStatus.partial)}%)`,
+  );
+  console.log(
+    `  ${chalk.red('✗ failure')}           ${String(goalStatus.failure).padStart(3)} (${pct(goalStatus.failure)}%)`,
+  );
+  console.log(
+    `  ${chalk.gray('⏸ unfinished')}        ${String(goalStatus.unfinished).padStart(3)} (${pct(goalStatus.unfinished)}%)`,
+  );
+
+  console.log();
+  const taskPct = (n: number): number =>
+    taskTotal > 0 ? Math.round((n / taskTotal) * 100) : 0;
+  console.log(`Tasks:                ${chalk.bold(taskTotal)} total`);
+  console.log(
+    `  ${chalk.green('✓ completed')}         ${String(taskCompleted).padStart(3)} (${taskPct(taskCompleted)}%)`,
+  );
+  console.log(
+    `  ${chalk.red('✗ failed')}            ${String(taskFailed).padStart(3)} (${taskPct(taskFailed)}%)`,
+  );
+  console.log(
+    `  ${chalk.gray('⏸ unfinished')}        ${String(taskUnfinished).padStart(3)} (${taskPct(taskUnfinished)}%)`,
+  );
+
+  if (durationsMs.length > 0) {
+    console.log();
+    console.log(`Average task duration: ${chalk.bold(formatDuration(avgMs))}`);
+    console.log(`Median task duration:  ${chalk.bold(formatDuration(medianMs))}`);
+  }
+
+  if (failedGateCounts.size > 0) {
+    console.log();
+    console.log(chalk.bold('Most-common failed gates:'));
+    const sortedGates = [...failedGateCounts.entries()].sort(
+      (a, b) => b[1] - a[1],
+    );
+    for (const [gate, count] of sortedGates) {
+      console.log(`  ${gate.padEnd(12)} ${chalk.red(count)}`);
+    }
+  }
+
+  if (recent.length > 0) {
+    console.log();
+    console.log(chalk.bold(`Recent goals (last ${recent.length}):`));
+    for (const r of recent) {
+      const status = r.ledger.summary?.final_status ?? 'unfinished';
+      const sigil =
+        status === 'success'
+          ? chalk.green('✓ success')
+          : status === 'partial'
+            ? chalk.yellow('⚠ partial')
+            : status === 'failure'
+              ? chalk.red('✗ failure')
+              : chalk.gray('⏸ unfinished');
+      const date = r.ledger.created_at.substring(0, 10);
+      console.log(
+        `  ${r.goalId.padEnd(50)} ${sigil.padEnd(20)} ${chalk.gray(date)}`,
+      );
+    }
+  }
+}
+
+/**
+ * Render the per-goal drill-down for `pi-forge stats --goal <id>`. Header
+ * (created/closed/duration/final_status), task table (id/status/duration/
+ * failure reason).
+ */
+export async function renderGoalStats(
+  state: FilesystemStateAdapter,
+  goalId: string,
+): Promise<void> {
+  const ledger = await state.loadEvidenceLedger(goalId);
+  const graph = await state.loadTaskGraph(goalId);
+  if (!ledger || !graph) {
+    console.log(chalk.red(`Goal not found: ${goalId}`));
+    process.exit(1);
+  }
+
+  const createdShort = ledger.created_at.substring(0, 19).replace('T', ' ');
+  const closedShort =
+    ledger.closed_at !== undefined
+      ? ledger.closed_at.substring(0, 19).replace('T', ' ')
+      : '—';
+  let durationStr = '—';
+  if (ledger.closed_at !== undefined) {
+    durationStr = formatDuration(
+      Date.parse(ledger.closed_at) - Date.parse(ledger.created_at),
+    );
+  }
+  const status = ledger.summary?.final_status ?? 'unfinished';
+
+  console.log(chalk.bold(`Goal: ${goalId}`));
+  console.log(`Created: ${createdShort}`);
+  console.log(
+    `Closed:  ${closedShort}${durationStr !== '—' ? `  (duration: ${durationStr})` : ''}`,
+  );
+  console.log(
+    `Final:   ${
+      status === 'success'
+        ? chalk.green(status)
+        : status === 'failure'
+          ? chalk.red(status)
+          : chalk.yellow(status)
+    }`,
+  );
+
+  console.log();
+  console.log(chalk.bold(`Tasks (${graph.tasks.length}):`));
+  const completedSet = new Set<string>();
+  const failedSet = new Set<string>();
+  const starts = new Map<string, number>();
+  const taskDurations = new Map<string, number>();
+  for (const e of ledger.entries) {
+    if (e.task_id === undefined) continue;
+    if (e.type === 'task_started') {
+      starts.set(e.task_id, Date.parse(e.timestamp));
+    } else if (e.type === 'task_completed') {
+      completedSet.add(e.task_id);
+      const s = starts.get(e.task_id);
+      if (s !== undefined) taskDurations.set(e.task_id, Date.parse(e.timestamp) - s);
+    } else if (e.type === 'task_failed') {
+      failedSet.add(e.task_id);
+      const s = starts.get(e.task_id);
+      if (s !== undefined) taskDurations.set(e.task_id, Date.parse(e.timestamp) - s);
+    }
+  }
+  for (const t of graph.tasks) {
+    const sigil = completedSet.has(t.id)
+      ? chalk.green('✓ completed')
+      : failedSet.has(t.id)
+        ? chalk.red('✗ failed')
+        : chalk.gray('⏸ skipped');
+    const durRaw = taskDurations.get(t.id);
+    const dur = durRaw !== undefined ? formatDuration(durRaw).padStart(6) : '   —  ';
+    const reason = failedSet.has(t.id)
+      ? ledger.entries.find(
+          (e) => e.type === 'task_failed' && e.task_id === t.id,
+        )?.description ?? ''
+      : '';
+    console.log(
+      `  ${t.id.padEnd(12)} ${sigil.padEnd(20)} ${dur}  ${chalk.gray(reason.substring(0, 60))}`,
+    );
+  }
+}
+
+/**
+ * Format a millisecond duration into a compact human-readable string.
+ *   < 1000ms → "Nms"
+ *   < 60s    → "Ns"
+ *   ≥ 60s    → "Nm Ss"
+ */
+export function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const totalSec = Math.round(ms / 1000);
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  if (min === 0) return `${sec}s`;
+  return `${min}m ${sec}s`;
 }
