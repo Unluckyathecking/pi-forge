@@ -319,12 +319,19 @@ export class ForgeOrchestrator {
     try {
       commitSha = await this.git.commit(worktree.path, commitMessage, { all: true });
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       this.logger.error('Failed to commit worker output', {
         taskId: task.id,
         worktree: worktree.path,
-        error: err instanceof Error ? err.message : String(err),
+        error: message,
       });
-      return undefined;
+      // Throw so the outer executeTask catches it and writes a
+      // task_failed ledger entry. Returning undefined here would mark
+      // the task as failed in-memory but leave the ledger silent.
+      throw new OrchestratorError(
+        `Worker output could not be committed: ${message}`,
+        'COMMIT_FAILED'
+      );
     }
 
     // 6. Re-stat the diff so the artifact reflects what the commit

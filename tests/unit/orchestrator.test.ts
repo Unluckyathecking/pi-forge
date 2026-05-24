@@ -306,7 +306,7 @@ describe('ForgeOrchestrator', () => {
     expect(lastArtifact.summary?.files_changed).toBe(2); // from diffSinceBranch mock
   });
 
-  it('marks the task as failed if commit fails after gates pass', async () => {
+  it('marks the task as failed AND records task_failed entry if commit fails after gates pass', async () => {
     const git = makeMockGit();
     (git.commit as jest.Mock<GitPort['commit']>).mockRejectedValue(new Error('commit refused'));
     const state = makeMockState();
@@ -324,5 +324,8 @@ describe('ForgeOrchestrator', () => {
 
     const ledger = await orch.executeGoal('Ship feature');
     expect(ledger.summary?.tasks_failed).toBeGreaterThanOrEqual(1);
+    const failedEntries = ledger.entries.filter((e) => e.type === 'task_failed');
+    expect(failedEntries.length).toBeGreaterThanOrEqual(1);
+    expect(failedEntries[0].description).toMatch(/commit/i);
   });
 });
