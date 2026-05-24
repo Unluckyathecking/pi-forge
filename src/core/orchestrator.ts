@@ -586,6 +586,24 @@ export class ForgeOrchestrator {
         const message = err instanceof Error ? err.message : String(err);
         this.logger.warn('preserveFailedTask: sidecar write failed', { taskId: task.id, error: message });
       }
+
+      // Drop tooling-ignore markers so parent-project eslint/tsc/etc don't
+      // recurse into this preserved worktree. Best-effort: warn but don't
+      // abort if either write fails (the preserved worktree is still usable
+      // via `pi-forge inspect`/`salvage`).
+      for (const [filename, content] of [
+        ['.eslintignore', '*\n'],
+        ['.gitignore', '*\n'],
+      ] as const) {
+        try {
+          await writeFile(joinPath(preservedPath, filename), content, 'utf-8');
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          this.logger.warn('preserveFailedTask: tooling-isolation marker write failed', {
+            taskId: task.id, filename, error: message,
+          });
+        }
+      }
     }
 
     // 6. Operator-facing summary log.

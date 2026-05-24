@@ -1,4 +1,7 @@
 import { describe, it, expect, jest } from '@jest/globals';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { ForgeOrchestrator } from '../../src/core/orchestrator.js';
 import type { ForgeConfig } from '../../src/core/types.js';
 import type { GitPort } from '../../src/ports/git.js';
@@ -723,5 +726,44 @@ describe('ForgeOrchestrator', () => {
     const markerCalls = (state.saveFailedMarker as jest.Mock<StatePort['saveFailedMarker']>).mock.calls;
     const marker = markerCalls[0][0];
     expect(marker.commit_sha).toBe('');
+  });
+
+  it('preserveFailedTask writes .eslintignore and .gitignore inside preserved worktree', async () => {
+    // Use a real temp dir to verify the file writes actually happen
+    const tmp = await mkdtemp(join(tmpdir(), 'pi-forge-iso-test-'));
+    try {
+      const git = makeMockGit();
+      // moveWorktree returns the same tmp path so the orchestrator writes into it
+      git.moveWorktree = jest.fn<GitPort['moveWorktree']>().mockResolvedValue(tmp);
+
+      const state = makeMockState();
+      const planner = makeMockPlanner();
+      const verifier: VerifierPort = {
+        ...makeMockVerifier(),
+        runAllGates: jest.fn<VerifierPort['runAllGates']>().mockResolvedValue([
+          { gate: 'lint', status: 'fail', command: 'lint', exit_code: 1, output: 'boom', duration_ms: 1 },
+        ]),
+      };
+      const config = makeMockConfig();
+      const configPreserve: ForgeConfig = {
+        ...config,
+        git: { ...config.git, failed_task_behavior: 'preserve' },
+      };
+
+      const orch = new ForgeOrchestrator({
+        config: configPreserve, git, state, verifier, planner,
+        logger: mockLogger,
+      });
+
+      await orch.executeGoal('Ship feature');
+
+      // Assert both marker files were written with content '*\n'
+      const eslintIgnore = await readFile(join(tmp, '.eslintignore'), 'utf-8');
+      const gitIgnore = await readFile(join(tmp, '.gitignore'), 'utf-8');
+      expect(eslintIgnore).toBe('*\n');
+      expect(gitIgnore).toBe('*\n');
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
   });
 });
