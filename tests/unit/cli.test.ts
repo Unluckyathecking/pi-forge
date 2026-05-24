@@ -3,8 +3,14 @@ import {
   parseDurationMs,
   stripFailedSuffix,
   renderInspect,
+  renderEntry,
+  findActiveTask,
 } from '../../src/cli/index.js';
-import type { FailedTaskMarker } from '../../src/core/types.js';
+import type {
+  EvidenceEntry,
+  EvidenceLedger,
+  FailedTaskMarker,
+} from '../../src/core/types.js';
 
 describe('parseDurationMs', () => {
   it('parses days', () => {
@@ -134,5 +140,72 @@ describe('renderInspect', () => {
   it('omits the worktree line when no path is set', () => {
     const out = renderInspect(fixtureMarker({ worktree_path: undefined }));
     expect(out).not.toContain('worktree:');
+  });
+});
+
+// ── pi-forge watch helpers ──
+
+function fixtureEntry(overrides: Partial<EvidenceEntry> = {}): EvidenceEntry {
+  return {
+    seq: 1,
+    timestamp: '2026-05-24T12:14:02.000Z',
+    type: 'task_started',
+    task_id: 'plan',
+    description: 'Plan architecture and contracts',
+    ...overrides,
+  };
+}
+
+function fixtureLedger(entries: EvidenceEntry[]): EvidenceLedger {
+  return {
+    goal_id: 'g1',
+    version: '1.0.0',
+    created_at: '2026-05-24T12:14:00.000Z',
+    entries,
+  };
+}
+
+describe('renderEntry', () => {
+  it('includes task_id, type, description, and a formatted timestamp', () => {
+    const entry = fixtureEntry({
+      seq: 7,
+      type: 'task_completed',
+      task_id: 'implement',
+      description: 'Implement feature',
+    });
+    const out = renderEntry(entry);
+    expect(out).toContain('task_completed');
+    expect(out).toContain('implement');
+    expect(out).toContain('Implement feature');
+    // The timestamp is locale-formatted but always wrapped in [ ].
+    expect(out).toMatch(/\[[^\]]+\]/);
+  });
+});
+
+describe('findActiveTask', () => {
+  it('returns the most-recent task_started without a matching completed/failed', () => {
+    const ledger = fixtureLedger([
+      fixtureEntry({ seq: 1, type: 'task_started', task_id: 'plan' }),
+      fixtureEntry({ seq: 2, type: 'task_completed', task_id: 'plan' }),
+      fixtureEntry({ seq: 3, type: 'task_started', task_id: 'implement' }),
+    ]);
+    const active = findActiveTask(ledger);
+    expect(active?.task_id).toBe('implement');
+  });
+
+  it('returns undefined when no task_started is in-flight', () => {
+    const ledger = fixtureLedger([
+      fixtureEntry({ seq: 1, type: 'task_started', task_id: 'plan' }),
+      fixtureEntry({ seq: 2, type: 'task_completed', task_id: 'plan' }),
+    ]);
+    expect(findActiveTask(ledger)).toBeUndefined();
+  });
+
+  it('ignores task_started when a matching task_failed exists', () => {
+    const ledger = fixtureLedger([
+      fixtureEntry({ seq: 1, type: 'task_started', task_id: 'implement' }),
+      fixtureEntry({ seq: 2, type: 'task_failed', task_id: 'implement' }),
+    ]);
+    expect(findActiveTask(ledger)).toBeUndefined();
   });
 });
