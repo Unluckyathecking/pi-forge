@@ -6,6 +6,44 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-05-24
+
+Phase 5 — operator extensibility + analytics. Hooks let operators
+plug custom logic into task lifecycle events; `pi-forge stats` gives
+a single-glance view across all goals.
+
+### Added
+
+- **`git.hooks.on_task_failed` and `git.hooks.on_task_completed`**
+  config keys. Operator-defined shell-script paths invoked after
+  task lifecycle events with `PI_FORGE_*` env vars (TASK_ID,
+  GOAL_ID, BRANCH, WORKTREE, TIMESTAMP, plus FAILED_GATES /
+  TAG_REF / COMMIT_SHA / FAILURE_REASON for failures, COMMIT_SHA /
+  DURATION_SECONDS for successes). Best-effort: hook failures log
+  warnings, never abort the run. Hooks are awaited so lifecycle
+  log entries land after the hook completes (useful for ordered
+  Slack/PagerDuty notifications). `on_task_failed` fires for ALL
+  failures — preserve, tag-and-purge, and legacy purge.
+- **`pi-forge stats [--goal <id>] [--last <n>]` subcommand**.
+  - Aggregate mode (no args): goal-level breakdown (success/partial/
+    failure/unfinished with percentages), task-level breakdown,
+    average + median task duration, most-common failed gates (from
+    proof artifacts' `failed_gates` field), and recent-goals table.
+  - Per-goal mode (`--goal <id>`): header (created/closed/duration/
+    final), task table with sigils, durations, and failure reasons.
+  - `--last <n>` (default 10) limits the recent-goals tail.
+- Internal: `preserveFailedTask` now returns
+  `{ commitSha, preservedPath }` so the caller can populate hook
+  env vars accurately.
+
+### Backwards compatibility
+
+- New `hooks` config block defaults to `{}` — no hooks invoked
+  unless operator opts in.
+- New `stats` subcommand — additive.
+- `preserveFailedTask` signature change is internal; no public API
+  affected.
+
 ## [1.5.0] — 2026-05-24
 
 Phase 4 — first-class observability + preserved-worktree polish.
