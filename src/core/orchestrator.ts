@@ -371,13 +371,27 @@ export class ForgeOrchestrator {
     completed: Set<string>,
     failed: Set<string>
   ): Task[] {
+    // ⚡ Bolt Optimization:
+    // Replaced O(V * E) filter lookup with an O(E) map pre-computation to speed up finding tasks.
+    // This reduces the complexity to O(V + E) for each call, significantly improving execution
+    // time for task graphs with many dependencies.
+    const dependencyMap = new Map<string, string[]>();
+    for (const edge of graph.edges) {
+      if (edge.type === 'depends_on') {
+        const deps = dependencyMap.get(edge.to);
+        if (deps) {
+          deps.push(edge.from);
+        } else {
+          dependencyMap.set(edge.to, [edge.from]);
+        }
+      }
+    }
+
     return graph.tasks.filter((task) => {
       if (completed.has(task.id) || failed.has(task.id) || task.status === 'running') {
         return false;
       }
-      const dependencies = graph.edges
-        .filter((e) => e.to === task.id && e.type === 'depends_on')
-        .map((e) => e.from);
+      const dependencies = dependencyMap.get(task.id) ?? [];
       return dependencies.every((dep) => completed.has(dep));
     });
   }
