@@ -6,6 +6,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import { stat } from 'node:fs/promises';
 import { GitError } from '../core/errors.js';
 import type { GitPort, MergeResult, WorktreeInfo } from '../ports/git.js';
 
@@ -384,6 +385,71 @@ export class GitCliAdapter implements GitPort {
       throw new GitError(`Failed to check dirty state for ${path}`, { path });
     }
     return stdout.trim().length > 0;
+  }
+
+  async moveWorktree(fromPath: string, toPath: string): Promise<string> {
+    if (this.repoRoot === undefined) {
+      throw new GitError('Adapter not initialized', {});
+    }
+
+    // Handle target-exists collision: append unix-ts suffix and retry.
+    // A previous preserved worktree may already occupy `toPath`; rather
+    // than clobber it, we suffix the new target with the current epoch.
+    let target = toPath;
+    try {
+      await stat(target);
+      target = `${toPath}-${Math.floor(Date.now() / 1000)}`;
+    } catch {
+      // ENOENT (or other stat failure) — target does not exist, use as-is.
+    }
+
+    const { exitCode, stderr } = await execGit(['worktree', 'move', fromPath, target], this.repoRoot);
+    if (exitCode !== 0) {
+      throw new GitError(`Failed to move worktree from ${fromPath} to ${target}`, {
+        fromPath,
+        target,
+        stderr,
+      });
+    }
+    return target;
+  }
+
+  async updateRef(refName: string, sha: string): Promise<void> {
+    if (this.repoRoot === undefined) {
+      throw new GitError('Adapter not initialized', {});
+    }
+    const { exitCode, stderr } = await execGit(['update-ref', refName, sha], this.repoRoot);
+    if (exitCode !== 0) {
+      throw new GitError(`Failed to update ref ${refName} to ${sha}`, { refName, sha, stderr });
+    }
+  }
+
+  async deleteRef(refName: string): Promise<void> {
+    if (this.repoRoot === undefined) {
+      throw new GitError('Adapter not initialized', {});
+    }
+    const { exitCode, stderr } = await execGit(['update-ref', '-d', refName], this.repoRoot);
+    if (exitCode !== 0) {
+      throw new GitError(`Failed to delete ref ${refName}`, { refName, stderr });
+    }
+  }
+
+  async listRefs(refPrefix: string): Promise<Array<{ ref: string; sha: string }>> {
+    if (this.repoRoot === undefined) {
+      throw new GitError('Adapter not initialized', {});
+    }
+    const { stdout, exitCode, stderr } = await execGit(
+      ['for-each-ref', '--format=%(refname) %(objectname)', refPrefix],
+      this.repoRoot,
+    );
+    if (exitCode !== 0) {
+      throw new GitError(`Failed to list refs under ${refPrefix}`, { refPrefix, stderr });
+    }
+    if (!stdout.trim()) return [];
+    return stdout.split('\n').map((line) => {
+      const [ref, sha] = line.split(' ');
+      return { ref, sha };
+    });
   }
 
   // ───────────────────────────────────────────────────────────────────────────
