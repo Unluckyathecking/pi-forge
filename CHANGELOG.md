@@ -6,6 +6,61 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.2.2] — 2026-05-24
+
+Phase 0+1 debuggability + escape-hatch patch. Failed runs are now
+diagnosable, and operators can opt-in to preserve the failed worktree
+for inspection.
+
+### Added
+
+- **Proof artifact is persisted on gate failure.** Previously the
+  artifact was built and then thrown away when gates failed, leaving
+  operators with an empty `.pi/state/evidence/<goal>/proofs/`
+  directory and no record of which gate failed. Now persisted with
+  two new optional fields on `ProofArtifact`:
+  - `all_pass: boolean` — true iff every required gate passed/warned.
+  - `failed_gates: string[]` — gate names whose status was `fail`.
+- **`--keep-on-fail` CLI flag** + **`git.preserve_worktree_on_failure`**
+  config key (default `false`). When set, the failure path skips
+  `destroyWorktree()`, leaving the dirty worktree for the operator to
+  inspect/salvage. The CLI flag is a per-run override (set via
+  immutable config spread, no mutation of the cached config).
+- **`task_failed` ledger entries on gate failure.** Previously,
+  `executeTaskInternal` returned `undefined` silently on gate failure;
+  `executeTask` saw the falsy result but wrote nothing to the ledger
+  (only thrown worker errors did). The ledger had `task_started` but
+  no matching `task_failed`. Now `executeTaskInternal` throws
+  `OrchestratorError('Required gate(s) failed: …', 'GATES_FAILED', …)`
+  with the failure context attached, and `executeTask`'s catch ledgers
+  the entry with `error_code` and any error context.
+
+### Changed
+
+- **Failure logging is structured and detailed.** New
+  `'Task failure detected'` log at error level includes
+  `failed_gates`, `first_error_line` (first non-blank line of failed
+  gate output, capped at 200 chars), `risk_score`, `risk_decision`.
+  The `'Critical task failed, aborting goal'` log now includes
+  `title`, `level`, and `reason` (from the most-recent matching
+  ledger entry).
+- **Zod schema accepts `unknown` input.** `forgeConfigSchema` is now
+  typed as `z.ZodType<ForgeConfig, z.ZodTypeDef, unknown>` (was
+  `z.ZodType<ForgeConfig>`). Required to allow `.default(false)` on
+  the new `preserve_worktree_on_failure` field while keeping output
+  strictly `ForgeConfig`. Future schema additions using `.default()`
+  / `.optional()` will work cleanly under the new signature.
+
+### Backwards compatibility
+
+- `ProofArtifact.{all_pass,failed_gates}` are optional — v1.x
+  consumers parse unchanged.
+- `ForgeConfig.git.preserve_worktree_on_failure` defaults to `false`
+  via Zod — legacy `config.yaml` files missing the key still parse.
+- Default behaviour unchanged: failed worktrees are still destroyed
+  unless `--keep-on-fail` is passed or `preserve_worktree_on_failure`
+  is set in `config.yaml`.
+
 ## [1.2.1] — 2026-05-24
 
 End-to-end success patch. Run 1 of pi-forge against a clean scaffold
