@@ -5,7 +5,7 @@
  * for concurrent safety.
  */
 
-import { mkdir, writeFile, readFile, readdir, access } from 'fs/promises';
+import { mkdir, writeFile, readFile, readdir, access, unlink } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { lock } from 'proper-lockfile';
@@ -15,6 +15,7 @@ import type {
   StateCheckpoint,
   TaskGraph,
   ProofArtifact,
+  FailedTaskMarker,
 } from '../core/types.js';
 import type { StatePort } from '../ports/state.js';
 import { StateError } from '../core/errors.js';
@@ -41,6 +42,7 @@ export class FilesystemStateAdapter implements StatePort {
       join(this.basePath, 'task-graphs'),
       join(this.basePath, 'evidence'),
       join(this.basePath, 'checkpoints'),
+      join(this.basePath, 'failed-tasks'),
     ];
     for (const dir of dirs) {
       await mkdir(dir, { recursive: true });
@@ -239,6 +241,40 @@ export class FilesystemStateAdapter implements StatePort {
       }
     }
     return checkpoints;
+  }
+
+  // ── Failed-task Markers ──
+  private failedMarkerPath(taskId: string): string {
+    assertSafeId(taskId, 'taskId');
+    return join(this.basePath, 'failed-tasks', `${taskId}.json`);
+  }
+
+  async saveFailedMarker(marker: FailedTaskMarker): Promise<void> {
+    await this.writeJson(this.failedMarkerPath(marker.task_id), marker);
+  }
+
+  async loadFailedMarker(taskId: string): Promise<FailedTaskMarker | undefined> {
+    return this.readJson<FailedTaskMarker>(this.failedMarkerPath(taskId));
+  }
+
+  async listFailedMarkers(): Promise<string[]> {
+    const dir = join(this.basePath, 'failed-tasks');
+    if (!existsSync(dir)) return [];
+    const files = await readdir(dir);
+    return files
+      .filter((f) => f.endsWith('.json'))
+      .map((f) => f.slice(0, -5));
+  }
+
+  async deleteFailedMarker(taskId: string): Promise<void> {
+    const path = this.failedMarkerPath(taskId);
+    try {
+      await unlink(path);
+    } catch (err) {
+      const code = (err as { code?: unknown } | null)?.code;
+      if (code === 'ENOENT') return;   // idempotent
+      throw new StateError(`Failed to delete marker ${path}`, { cause: err instanceof Error ? err.message : String(err) });
+    }
   }
 
   // ── Health ──

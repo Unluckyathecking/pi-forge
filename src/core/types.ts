@@ -369,3 +369,61 @@ export interface ForgeConfig {
     readonly require_review: string[];
   };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Failed-task markers (Phase 2 preservation)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Record of a preserved failed task. Written by the orchestrator when
+ * git.failed_task_behavior === "preserve" (or "tag-and-purge"). Stored
+ * at `.pi/state/failed-tasks/<task_id>.json` and (where the worktree
+ * survives) duplicated as `<worktree>/.pi-failed.json` for in-tree
+ * discoverability. Consumed by `pi-forge inspect <task-id>`,
+ * `pi-forge salvage`, and `pi-forge cleanup --failed`.
+ */
+export interface FailedTaskMarker {
+  readonly task_id: string;
+  readonly goal_id: string;
+  readonly failed_at: string;            // ISO timestamp
+
+  /** Why it failed — typically "gate_failure". */
+  readonly failure_kind: 'gate_failure' | 'worker_error' | 'timeout' | 'aborted';
+
+  /** The task's branch name (may still exist depending on retain_failed_branches). */
+  readonly branch: string;
+
+  /** Custom ref where the failed SHA was tagged, e.g. refs/forge/failed/<g>/<t>. */
+  readonly tag_ref: string;
+  readonly commit_sha: string;
+
+  /** True if the wip-on-failure commit had no changes to stage. */
+  readonly wip_commit_was_empty: boolean;
+
+  /** Worktree path on disk. Undefined when failed_task_behavior is "tag-and-purge". */
+  readonly worktree_path?: string;
+
+  /** Gate-level summary for fast inspection without re-reading the proof artifact. */
+  readonly gates: ReadonlyArray<{
+    readonly name: string;
+    readonly status: 'pass' | 'warn' | 'fail' | 'skip';
+    readonly exit_code: number;
+    readonly stderr_first_line?: string;
+  }>;
+
+  /** Files touched in the dirty diff before commit. */
+  readonly files_modified: ReadonlyArray<string>;
+  readonly lines_added: number;
+  readonly lines_removed: number;
+
+  /** Free-form one-liner the operator sees in logs and `pi-forge inspect`. */
+  readonly recovery_hint: string;
+
+  /** Convenience operator-command strings printed by `pi-forge inspect`. */
+  readonly operator_commands: {
+    readonly inspect: string;
+    readonly salvage: string;
+    readonly retry: string;
+    readonly purge: string;
+  };
+}
