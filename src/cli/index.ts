@@ -5,6 +5,7 @@
  * Entry point for the pi-forge command-line interface.
  */
 
+import { spawn } from 'node:child_process';
 import { readFileSync, realpathSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -21,7 +22,12 @@ import { PiSdkWorkerAdapter } from '../adapters/worker.js';
 import { loadConfig } from '../utils/config.js';
 import { createLogger } from '../utils/logger.js';
 import { ForgeError } from '../core/errors.js';
-import type { EvidenceLedger, FailedTaskMarker, ForgeConfig } from '../core/types.js';
+import type {
+  EvidenceEntry,
+  EvidenceLedger,
+  FailedTaskMarker,
+  ForgeConfig,
+} from '../core/types.js';
 
 const PI_FORGE_VERSION = resolveVersion();
 const program = new Command();
@@ -200,6 +206,27 @@ program
           console.log(chalk.gray(`Final status: ${ledger.summary.final_status}`));
         }
       }
+    } catch (err) {
+      handleError(err);
+      process.exit(1);
+    }
+  });
+
+interface WatchCommandOptions {
+  interval?: string;
+}
+
+program
+  .command('watch')
+  .description('Tail the evidence ledger + active worktree for a running goal')
+  .argument('<goalId>', 'Goal ID returned by `pi-forge forge`')
+  .option('--interval <ms>', 'Refresh interval in ms', '2000')
+  .action(async (goalId: string, options: WatchCommandOptions) => {
+    try {
+      const state = new FilesystemStateAdapter();
+      await state.init('.pi/state');
+      const intervalMs = parseInt(options.interval ?? '2000', 10);
+      await runWatchLoop(state, goalId, intervalMs);
     } catch (err) {
       handleError(err);
       process.exit(1);
@@ -677,4 +704,207 @@ export function renderInspect(marker: FailedTaskMarker): string {
   lines.push('');
 
   return lines.join('\n');
+}
+
+// ── Helpers for `pi-forge watch` ──
+
+const WATCH_LEDGER_WAIT_MS = 10_000;
+const WATCH_WORKTREE_HEARTBEAT_MS = 30_000;
+
+async function runWatchLoop(
+  state: FilesystemStateAdapter,
+  goalId: string,
+  intervalMs: number,
+): Promise<void> {
+  console.log(
+    chalk.gray(
+      `[watching ${goalId} — refresh every ${intervalMs}ms, ctrl-c to stop]`,
+    ),
+  );
+
+  let lastSeq = -1;
+  let lastWorktreeFileCount = -1;
+  let lastWorktreeUpdate = 0;
+  let shouldStop = false;
+
+  const onSigint = (): void => {
+    shouldStop = true;
+  };
+  process.once('SIGINT', onSigint);
+
+  // Wait for the ledger to exist (race against forge starting). Up to 10s.
+  const ledgerStart = Date.now();
+  while (!shouldStop) {
+    const initial = await state.loadEvidenceLedger(goalId);
+    if (initial) break;
+    if (Date.now() - ledgerStart > WATCH_LEDGER_WAIT_MS) {
+      process.off('SIGINT', onSigint);
+      throw new Error(
+        `Ledger not found for goal '${goalId}' after 10s. Is the goal id correct?`,
+      );
+    }
+    await sleep(500);
+  }
+
+  while (!shouldStop) {
+    const ledger = await state.loadEvidenceLedger(goalId);
+    if (!ledger) break;
+
+    // Print new ledger entries since we last saw the ledger.
+    const newEntries = ledger.entries.filter((e) => e.seq > lastSeq);
+    for (const entry of newEntries) {
+      console.log(renderEntry(entry));
+    }
+    if (newEntries.length > 0) {
+      lastSeq = ledger.entries[ledger.entries.length - 1].seq;
+    }
+
+    // For the currently-running task, show worktree activity.
+    const activeTask = findActiveTask(ledger);
+    if (activeTask?.task_id !== undefined) {
+      const wtPath = join(
+        process.cwd(),
+        '.pi',
+        'worktrees',
+        goalId,
+        activeTask.task_id,
+      );
+      try {
+        const stats = await readWorktreeStats(wtPath);
+        const now = Date.now();
+        const countChanged = stats.modifiedCount !== lastWorktreeFileCount;
+        const heartbeatDue = now - lastWorktreeUpdate > WATCH_WORKTREE_HEARTBEAT_MS;
+        if (countChanged || heartbeatDue) {
+          const recent =
+            stats.mostRecent !== undefined ? ` · ${stats.mostRecent}` : '';
+          console.log(
+            chalk.gray(
+              `  worktree: ${wtPath} (${stats.modifiedCount} files modified${recent})`,
+            ),
+          );
+          lastWorktreeFileCount = stats.modifiedCount;
+          lastWorktreeUpdate = now;
+        }
+      } catch {
+        // Worktree gone or not yet created — silent.
+      }
+    }
+
+    // Terminate once the run is finalised.
+    if (ledger.summary?.final_status !== undefined) {
+      const finalStatus = ledger.summary.final_status;
+      const colour =
+        finalStatus === 'success'
+          ? chalk.green.bold
+          : finalStatus === 'partial'
+            ? chalk.yellow.bold
+            : chalk.red.bold;
+      console.log(
+        colour(
+          `FINAL: ${finalStatus} (${ledger.summary.tasks_completed ?? 0} completed, ${ledger.summary.tasks_failed ?? 0} failed)`,
+        ),
+      );
+      process.off('SIGINT', onSigint);
+      process.exit(finalStatus === 'success' ? 0 : 1);
+    }
+
+    await sleep(intervalMs);
+  }
+
+  process.off('SIGINT', onSigint);
+}
+
+/**
+ * Format a single evidence-ledger entry for the watch stream.
+ * Pure: timestamp comes from `entry.timestamp`, no I/O.
+ */
+export function renderEntry(entry: EvidenceEntry): string {
+  const ts = new Date(entry.timestamp).toLocaleTimeString();
+  const taskCol = (entry.task_id ?? '—').padEnd(10);
+  const typeCol = entry.type.padEnd(14);
+  const desc = (entry.description ?? '').substring(0, 80);
+  const colour =
+    entry.type === 'task_completed'
+      ? chalk.green
+      : entry.type === 'task_failed'
+        ? chalk.red
+        : entry.type === 'task_started'
+          ? chalk.blue
+          : entry.type === 'merge'
+            ? chalk.cyan
+            : chalk.white;
+  return `${chalk.gray(`[${ts}]`)} ${colour(typeCol)} ${chalk.bold(taskCol)} ${desc}`;
+}
+
+/**
+ * Find the most-recent `task_started` whose `task_id` has not yet been
+ * matched by a `task_completed` or `task_failed`. Returns undefined when
+ * nothing is in-flight.
+ */
+export function findActiveTask(ledger: EvidenceLedger): EvidenceEntry | undefined {
+  const finished = new Set<string>();
+  for (const e of ledger.entries) {
+    if (
+      (e.type === 'task_completed' || e.type === 'task_failed') &&
+      e.task_id !== undefined
+    ) {
+      finished.add(e.task_id);
+    }
+  }
+  for (let i = ledger.entries.length - 1; i >= 0; i--) {
+    const e = ledger.entries[i];
+    if (
+      e.type === 'task_started' &&
+      e.task_id !== undefined &&
+      !finished.has(e.task_id)
+    ) {
+      return e;
+    }
+  }
+  return undefined;
+}
+
+export interface WorktreeStats {
+  readonly modifiedCount: number;
+  readonly mostRecent?: string;
+}
+
+/**
+ * Count modified files inside the worktree via `git status --porcelain`.
+ * Picks the last porcelain line as `mostRecent` — git emits them in stable
+ * (sorted) order, so this is a cheap heuristic, not a true mtime sort. The
+ * watcher already throttles output to once per change or every 30s, so a
+ * fancier sort isn't worth the extra fs calls.
+ */
+export async function readWorktreeStats(
+  worktreePath: string,
+): Promise<WorktreeStats> {
+  const proc = spawn('git', ['status', '--porcelain'], {
+    cwd: worktreePath,
+    env: process.env,
+  });
+  const stdout = await new Promise<string>((resolve, reject) => {
+    let out = '';
+    proc.stdout?.on('data', (chunk: Buffer) => {
+      out += chunk.toString('utf8');
+    });
+    proc.on('close', (code: number | null) =>
+      code === 0 ? resolve(out) : reject(new Error(`git status exited ${code ?? 'null'}`)),
+    );
+    proc.on('error', reject);
+  });
+  const lines = stdout
+    .trim()
+    .split('\n')
+    .filter((l) => l.trim().length > 0);
+  const last = lines.length > 0 ? lines[lines.length - 1] : undefined;
+  // Porcelain v1 lines look like `XY path`. Strip the 2-char status + space.
+  return {
+    modifiedCount: lines.length,
+    mostRecent: last !== undefined ? last.slice(3) : undefined,
+  };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
