@@ -6,6 +6,53 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-05-24
+
+### Added
+
+- `PiSdkWorkerAdapter` now **registers the `kimi-coder` provider against
+  the Pi SDK's `ModelRegistry`** before creating an `AgentSession`. This
+  makes autonomous coding work programmatically from outside the Pi
+  cockpit — the previous v1.1 worker hit `No API key found for the
+  selected model` because no provider was registered. The config is
+  identical to what the `pi-kimi-coder` extension passes (same base URL
+  `https://api.kimi.com/coding/v1`, same `User-Agent: KimiCLI/1.5`
+  header that the Kimi backend explicitly checks, same three models:
+  `kimi-for-coding`, `kimi-k2.6`, `kimi-k2-thinking`).
+- `WorkerInitOptions.kimiApiKey` — programmatic static credential.
+- `WorkerInitOptions.agentDir` — override Pi's user dir if needed.
+- `WorkerInitOptions.providerName` / `modelId` — customise selection.
+- CLI flags `--kimi-key <key>`, `--model <id>`, `--provider <name>`.
+  The CLI reads `process.env.KIMI_CODER_API_KEY` as a fallback.
+
+### Changed
+
+- `worktreePath` now uses `path.join()` instead of string concat, so
+  `worktree_base` works whether or not the user includes a trailing
+  slash. Fixes the malformed `.pi/worktrees<goal>/<task>` paths that
+  appeared in v1.1 logs when running against the embedded default
+  config (which had no trailing slash).
+- Ambient stub `src/types/pi-coding-agent.d.ts` extended to cover
+  `AuthStorage`, `ModelRegistry`, and `ProviderConfigInput`. Branded
+  opaque types so ESLint's `no-redundant-type-constituents` doesn't
+  collapse `ModelLike | undefined`.
+
+### Authentication paths
+
+The worker now resolves Kimi credentials in this order:
+
+1. `WorkerInitOptions.kimiApiKey` (programmatic).
+2. `--kimi-key` CLI flag.
+3. `KIMI_CODER_API_KEY` env var.
+4. OAuth tokens in `~/.pi/agent/auth.json` (the existing Pi user setup,
+   refreshed silently under a file lock).
+
+If none resolve, `worker.init()` still completes (the provider is
+registered without auth) but the first `execute()` call will throw at
+prompt time with a meaningful upstream error.
+
+
+
 ### Added
 
 - `WorkerPort` and `PiSdkWorkerAdapter` for autonomous code generation. The

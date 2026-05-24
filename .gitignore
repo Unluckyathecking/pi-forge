@@ -32,3 +32,6 @@ config/default.yaml
 # Pi project settings are useful; runtime state is not.
 .pi/*
 !.pi/settings.json
+
+# Knowledge graph artifacts (Understand-Anything)
+.understand-anything/

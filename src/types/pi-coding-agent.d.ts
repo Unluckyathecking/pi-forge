@@ -38,9 +38,54 @@ declare module '@mariozechner/pi-coding-agent' {
     readonly errorMessage?: string;
   }
 
+  /** Branded opaque handle. The SDK exposes a `Model<Api>` type with much more,
+   *  but the worker just passes the handle through to `createAgentSession`. */
+  export interface ModelLike {
+    readonly __piModelBrand: never;
+  }
+
+  /** Branded opaque handle for `AuthStorage`. Created via `AuthStorage.create(path)`. */
+  export interface AuthStorageLike {
+    readonly __piAuthStorageBrand: never;
+  }
+
+  /** Subset of ProviderConfigInput used by the worker. Mirrors the shape Pi's
+   *  pi-kimi-coder extension passes to `registerProvider`. */
+  export interface ProviderConfigInputLike {
+    readonly baseUrl?: string;
+    readonly apiKey?: string;
+    readonly api?: string;
+    readonly headers?: Readonly<Record<string, string>>;
+    readonly authHeader?: boolean;
+    readonly models?: ReadonlyArray<{
+      readonly id: string;
+      readonly name: string;
+      readonly reasoning: boolean;
+      readonly input: ReadonlyArray<'text' | 'image'>;
+      readonly cost: { readonly input: number; readonly output: number; readonly cacheRead: number; readonly cacheWrite: number };
+      readonly contextWindow: number;
+      readonly maxTokens: number;
+      readonly compat?: {
+        readonly thinkingFormat?: string;
+        readonly maxTokensField?: string;
+        readonly supportsDeveloperRole?: boolean;
+        readonly supportsStore?: boolean;
+      };
+    }>;
+  }
+
+  export interface ModelRegistryLike {
+    readonly __piModelRegistryBrand: never;
+    registerProvider(providerName: string, config: ProviderConfigInputLike): void;
+    find(provider: string, modelId: string): ModelLike | undefined;
+  }
+
   export interface CreateAgentSessionOptionsLike {
     readonly cwd?: string;
     readonly agentDir?: string;
+    readonly authStorage?: AuthStorageLike;
+    readonly modelRegistry?: ModelRegistryLike;
+    readonly model?: ModelLike;
     readonly noTools?: 'all' | 'builtin';
     readonly tools?: readonly string[];
   }
@@ -52,4 +97,13 @@ declare module '@mariozechner/pi-coding-agent' {
   export function createAgentSession(
     options?: CreateAgentSessionOptionsLike
   ): Promise<CreateAgentSessionResultLike>;
+
+  export const AuthStorage: {
+    create(path: string): AuthStorageLike;
+  };
+
+  export const ModelRegistry: {
+    create(authStorage: AuthStorageLike, modelsJsonPath?: string): ModelRegistryLike;
+    inMemory(authStorage: AuthStorageLike): ModelRegistryLike;
+  };
 }

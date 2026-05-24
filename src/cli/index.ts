@@ -35,6 +35,9 @@ interface ForgeCommandOptions {
   dryRun?: boolean;
   verbose?: boolean;
   noWorker?: boolean;
+  kimiKey?: string;
+  model?: string;
+  provider?: string;
 }
 
 program
@@ -45,6 +48,9 @@ program
   .option('-d, --dry-run', 'Plan only, do not execute')
   .option('-v, --verbose', 'Verbose output')
   .option('--no-worker', 'Disable the Pi SDK worker (gates-only mode)')
+  .option('--kimi-key <key>', 'Kimi Coding API key (sk-kimi-…). Falls back to $KIMI_CODER_API_KEY, then to OAuth in ~/.pi/agent/auth.json.')
+  .option('--model <id>', 'Model id within the provider (default: kimi-for-coding)')
+  .option('--provider <name>', 'Provider name (default: kimi-coder)')
   .action(async (goal: string, options: ForgeCommandOptions) => {
     if (options.verbose === true) {
       process.env.LOG_LEVEL = 'debug';
@@ -70,7 +76,12 @@ program
       } else {
         worker = new PiSdkWorkerAdapter();
         try {
-          await worker.init({ projectRoot: process.cwd() });
+          await worker.init({
+            projectRoot: process.cwd(),
+            kimiApiKey: options.kimiKey ?? process.env.KIMI_CODER_API_KEY,
+            modelId: options.model,
+            providerName: options.provider,
+          });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           spinner.warn(`Pi SDK worker unavailable; falling back to gates-only mode (${message})`);

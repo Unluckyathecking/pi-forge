@@ -38,6 +38,29 @@ export interface WorkerInitOptions {
    * execute commands after the worker finishes.
    */
   readonly tools?: readonly string[];
+  /**
+   * Optional Kimi Coding API key (sk-kimi-…). When set, the worker registers
+   * the `kimi-coder` provider against Pi's `ModelRegistry` and uses this key
+   * directly as a static bearer credential. When omitted, the worker still
+   * registers the provider but lets Pi resolve the OAuth credentials from
+   * `~/.pi/agent/auth.json`. Reads `process.env.KIMI_CODER_API_KEY` as a
+   * fallback if this field is undefined.
+   */
+  readonly kimiApiKey?: string;
+  /**
+   * Pi provider directory containing `auth.json` and `models.json`. Defaults
+   * to `~/.pi/agent`. Allows isolating credentials per run if needed.
+   */
+  readonly agentDir?: string;
+  /**
+   * Provider name passed to the SDK (`kimi-coder` by default). Used to
+   * register the provider and resolve the model.
+   */
+  readonly providerName?: string;
+  /**
+   * Model id within the provider (`kimi-for-coding` by default).
+   */
+  readonly modelId?: string;
 }
 
 export interface WorkerPort {

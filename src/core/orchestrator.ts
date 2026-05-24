@@ -15,6 +15,7 @@ import type {
 } from './types.js';
 import { OrchestratorError } from './errors.js';
 import { createHash } from 'node:crypto';
+import { join as joinPath } from 'node:path';
 import type { GitPort } from '../ports/git.js';
 import type { StatePort } from '../ports/state.js';
 import type { VerifierPort } from '../ports/verifier.js';
@@ -217,7 +218,9 @@ export class ForgeOrchestrator {
       .replace('{task_id}', task.id)
       .replace('{slug}', slugify(task.title));
 
-    const worktreePath = `${this.config.git.worktree_base}${this.currentGoalId}/${task.id}`;
+    // Use path.join so trailing slashes in worktree_base are handled correctly
+    // (the embedded default omits the slash; user config.yaml usually has it).
+    const worktreePath = joinPath(this.config.git.worktree_base, this.currentGoalId, task.id);
     const baseBranch = await this.git.currentBranch();
 
     task.status = 'running';

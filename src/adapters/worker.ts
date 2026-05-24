@@ -2,20 +2,29 @@
  * PiSdkWorkerAdapter — WorkerPort implementation that delegates code edits to
  * an isolated Pi Coding Agent session.
  *
- * Pi Forge does not call any LLM API directly. Authentication and model
- * selection live in `~/.pi/agent/` (managed by `pi auth` / `pi model`). This
- * adapter just spawns an agent session in the worktree directory and lets Pi
- * handle the conversation. If `@mariozechner/pi-coding-agent` is not
- * installed, the adapter throws on init and the orchestrator falls back to
- * gates-only mode.
+ * Pi Forge does not call any LLM API directly. The worker registers the
+ * `kimi-coder` provider against Pi's `ModelRegistry` (mirroring what the
+ * `pi-kimi-coder` extension does inside an interactive Pi session) and lets
+ * Pi handle the actual prompting, token refresh, and streaming. When a
+ * `kimiApiKey` is provided we use the static `sk-kimi-…` credential; when
+ * absent, Pi falls back to the OAuth tokens in `~/.pi/agent/auth.json`.
+ *
+ * The worker has no compile-time dependency on `@mariozechner/pi-coding-agent`
+ * — the import is dynamic so pi-forge still builds without the SDK present.
  */
 
 import { execFile } from 'node:child_process';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type {
   AgentSessionEventLike,
-  AgentSessionLike,
+  AuthStorageLike,
   CreateAgentSessionOptionsLike,
+  CreateAgentSessionResultLike,
+  ModelLike,
+  ModelRegistryLike,
+  ProviderConfigInputLike,
 } from '@mariozechner/pi-coding-agent';
 import type { Task } from '../core/types.js';
 import { WorkerError } from '../core/errors.js';
@@ -29,11 +38,78 @@ const execFileAsync = promisify(execFile);
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_TOOLS: readonly string[] = ['read', 'edit', 'write', 'grep', 'ls'];
+const DEFAULT_PROVIDER = 'kimi-coder';
+const DEFAULT_MODEL = 'kimi-for-coding';
 const SDK_PACKAGE = '@mariozechner/pi-coding-agent';
+
+/**
+ * Kimi-coder provider configuration. Mirrors `pi-kimi-coder/extensions/index.ts`
+ * verbatim because the upstream Kimi Coding API checks `User-Agent` and rejects
+ * any request that doesn't claim to be `KimiCLI/1.5`.
+ */
+const KIMI_CODER_PROVIDER_CONFIG: ProviderConfigInputLike = {
+  baseUrl: 'https://api.kimi.com/coding/v1',
+  apiKey: 'KIMI_CODER_API_KEY',
+  api: 'openai-completions',
+  headers: { 'User-Agent': 'KimiCLI/1.5' },
+  models: [
+    {
+      id: 'kimi-for-coding',
+      name: 'Kimi for Coding (K2.6)',
+      reasoning: true,
+      input: ['text', 'image'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 262144,
+      maxTokens: 32768,
+      compat: {
+        thinkingFormat: 'zai',
+        maxTokensField: 'max_tokens',
+        supportsDeveloperRole: false,
+        supportsStore: false,
+      },
+    },
+    {
+      id: 'kimi-k2.6',
+      name: 'Kimi K2.6',
+      reasoning: true,
+      input: ['text', 'image'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 262144,
+      maxTokens: 32768,
+      compat: {
+        thinkingFormat: 'zai',
+        maxTokensField: 'max_tokens',
+        supportsDeveloperRole: false,
+        supportsStore: false,
+      },
+    },
+    {
+      id: 'kimi-k2-thinking',
+      name: 'Kimi K2 Thinking',
+      reasoning: true,
+      input: ['text', 'image'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 262144,
+      maxTokens: 32768,
+      compat: {
+        thinkingFormat: 'zai',
+        maxTokensField: 'max_tokens',
+        supportsDeveloperRole: false,
+        supportsStore: false,
+      },
+    },
+  ],
+};
 
 type SdkCreateAgentSession = (
   options?: CreateAgentSessionOptionsLike
-) => Promise<{ session: AgentSessionLike }>;
+) => Promise<CreateAgentSessionResultLike>;
+
+interface PiSdkModule {
+  readonly createAgentSession: SdkCreateAgentSession;
+  readonly AuthStorage: { create(path: string): AuthStorageLike };
+  readonly ModelRegistry: { create(authStorage: AuthStorageLike, modelsJsonPath?: string): ModelRegistryLike };
+}
 
 interface DiffStats {
   readonly filesChanged: number;
@@ -47,7 +123,12 @@ export class PiSdkWorkerAdapter implements WorkerPort {
   private projectRoot = '';
   private timeoutMs = DEFAULT_TIMEOUT_MS;
   private allowedTools: readonly string[] = DEFAULT_TOOLS;
-  private createSession?: SdkCreateAgentSession;
+  private providerName = DEFAULT_PROVIDER;
+  private modelId = DEFAULT_MODEL;
+  private sdk?: PiSdkModule;
+  private authStorage?: AuthStorageLike;
+  private modelRegistry?: ModelRegistryLike;
+  private model?: ModelLike;
 
   async init(options: WorkerInitOptions): Promise<void> {
     this.projectRoot = options.projectRoot;
@@ -55,13 +136,15 @@ export class PiSdkWorkerAdapter implements WorkerPort {
     if (options.tools !== undefined && options.tools.length > 0) {
       this.allowedTools = options.tools;
     }
+    this.providerName = options.providerName ?? DEFAULT_PROVIDER;
+    this.modelId = options.modelId ?? DEFAULT_MODEL;
 
-    let mod: { createAgentSession?: SdkCreateAgentSession };
+    let mod: PiSdkModule;
     try {
-      // Use a non-literal specifier so bundlers (e.g. tsx, esbuild) don't try
-      // to resolve the optional peer dep at build time.
+      // Non-literal specifier so bundlers don't try to resolve the optional
+      // peer dep at build time.
       const specifier = SDK_PACKAGE;
-      mod = (await import(specifier)) as { createAgentSession?: SdkCreateAgentSession };
+      mod = (await import(specifier)) as PiSdkModule;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       throw new WorkerError(
@@ -70,22 +153,51 @@ export class PiSdkWorkerAdapter implements WorkerPort {
       );
     }
 
-    if (typeof mod.createAgentSession !== 'function') {
+    if (
+      typeof mod.createAgentSession !== 'function' ||
+      typeof (mod.AuthStorage as { create?: unknown } | undefined)?.create !== 'function' ||
+      typeof (mod.ModelRegistry as { create?: unknown } | undefined)?.create !== 'function'
+    ) {
       throw new WorkerError(
-        `${SDK_PACKAGE} resolved but does not export createAgentSession`,
+        `${SDK_PACKAGE} resolved but is missing required exports (createAgentSession / AuthStorage / ModelRegistry)`,
         { projectRoot: this.projectRoot }
       );
     }
-    this.createSession = mod.createAgentSession;
+    this.sdk = mod;
+
+    // Wire the Kimi key into the env var the provider reads as its bearer.
+    // Priority: explicit init option → existing env var → leave unset (Pi
+    // falls back to OAuth tokens in auth.json).
+    const explicitKey = options.kimiApiKey ?? process.env.KIMI_CODER_API_KEY;
+    if (explicitKey !== undefined && explicitKey.length > 0) {
+      process.env.KIMI_CODER_API_KEY = explicitKey;
+    }
+
+    const agentDir = options.agentDir ?? join(homedir(), '.pi', 'agent');
+    this.authStorage = mod.AuthStorage.create(join(agentDir, 'auth.json'));
+    this.modelRegistry = mod.ModelRegistry.create(this.authStorage, join(agentDir, 'models.json'));
+    this.modelRegistry.registerProvider(this.providerName, KIMI_CODER_PROVIDER_CONFIG);
+
+    const model = this.modelRegistry.find(this.providerName, this.modelId);
+    if (model === undefined) {
+      throw new WorkerError(
+        `Model ${this.providerName}/${this.modelId} not found after provider registration`,
+        { provider: this.providerName, modelId: this.modelId }
+      );
+    }
+    this.model = model;
   }
 
   async execute(task: Task, worktreePath: string, signal?: AbortSignal): Promise<WorkerResult> {
-    if (!this.createSession) {
+    if (!this.sdk || !this.modelRegistry || this.model === undefined) {
       throw new WorkerError('Worker adapter not initialized. Call init() first.');
     }
 
-    const { session } = await this.createSession({
+    const { session } = await this.sdk.createAgentSession({
       cwd: worktreePath,
+      authStorage: this.authStorage,
+      modelRegistry: this.modelRegistry,
+      model: this.model,
       tools: [...this.allowedTools],
     });
 
@@ -124,13 +236,13 @@ export class PiSdkWorkerAdapter implements WorkerPort {
   }
 
   async health(): Promise<{ ok: boolean; message?: string }> {
-    if (!this.createSession) {
+    if (!this.sdk || !this.modelRegistry) {
       return { ok: false, message: 'Pi SDK not loaded' };
     }
-    // Lightweight liveness check: confirm the SDK entry point is callable
-    // without paying the cost of spinning up a real AgentSession (which
-    // touches auth, model registry, and session persistence).
-    return Promise.resolve({ ok: true, message: 'Pi SDK worker initialized' });
+    if (this.model === undefined) {
+      return { ok: false, message: `Model ${this.providerName}/${this.modelId} not resolved` };
+    }
+    return Promise.resolve({ ok: true, message: `Pi SDK worker initialized with ${this.providerName}/${this.modelId}` });
   }
 
   // ── Private helpers ──
@@ -140,6 +252,8 @@ export class PiSdkWorkerAdapter implements WorkerPort {
     return [
       'You are an autonomous coding agent executing one task inside an isolated git worktree.',
       '',
+      'IMPORTANT: a sibling `PLAN.md` (in the worktree root) may contain the authoritative spec for this work — read it first if it exists, then execute against it.',
+      '',
       '<task>',
       `  <worktree>${escapeXml(worktreePath)}</worktree>`,
       `  <id>${escapeXml(task.id)}</id>`,
@@ -148,7 +262,7 @@ export class PiSdkWorkerAdapter implements WorkerPort {
       '</task>',
       '',
       'Instructions:',
-      '1. Inspect the existing codebase to understand context.',
+      '1. Read PLAN.md if present; otherwise inspect the codebase to understand context.',
       '2. Make the minimal correct change to fulfill the task.',
       '3. Preserve existing conventions, formatting, and unrelated code.',
       '4. Do NOT add boilerplate comments or verbose explanations in files.',
