@@ -41,8 +41,15 @@ export interface GitPort {
   /** Commit changes in a worktree */
   commit(path: string, message: string, options?: { all?: boolean }): Promise<string>;
 
-  /** Get diff stats for a worktree */
+  /** Get diff stats for a worktree (working tree vs HEAD, untracked excluded). */
   diffStats(path: string): Promise<{ files: number; additions: number; deletions: number }>;
+
+  /**
+   * Get diff stats between the current HEAD of `path` and `baseBranch`.
+   * Captures the full commit-vs-base delta, including freshly-added files
+   * — the pre-commit `diffStats` cannot see untracked files.
+   */
+  diffSinceBranch(path: string, baseBranch: string): Promise<{ files: number; additions: number; deletions: number }>;
 
   /** Merge source branch into target branch */
   merge(target: string, source: string, strategy?: 'merge' | 'rebase'): Promise<MergeResult>;

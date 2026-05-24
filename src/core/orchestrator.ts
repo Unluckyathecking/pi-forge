@@ -216,6 +216,7 @@ export class ForgeOrchestrator {
     // 1. Create worktree
     const branchName = this.config.git.task_branch_template
       .replace('{task_id}', task.id)
+      .replace('{taskId}', task.id)
       .replace('{slug}', slugify(task.title));
 
     // Use path.join so trailing slashes in worktree_base are handled correctly
@@ -278,7 +279,7 @@ export class ForgeOrchestrator {
         status: g.status,
         command: g.command,
         exit_code: g.exit_code,
-        output_excerpt: g.output.substring(0, 500),
+        output_excerpt: g.output.substring(0, this.config.proof_carrying.artifact.max_output_excerpt_length),
         timestamp: formatDate(),
         verifier: 'mechanical',
       })),
@@ -291,9 +292,8 @@ export class ForgeOrchestrator {
       },
     };
 
-    await this.state.saveProofArtifact(this.currentGoalId, artifact);
-
-    // 4. Risk score
+    // 4. Risk score (before persisting the artifact so the commit step
+    //    can also enrich the persisted record).
     const risk = await this.verifier.scoreRisk(worktree.path);
     this.logger.info('Task gates complete', {
       taskId: task.id,
@@ -309,6 +309,46 @@ export class ForgeOrchestrator {
       }
       return undefined;
     }
+
+    // 5. Commit the worker's edits so the merge step has something to
+    //    rebase. The worker writes files into the worktree but never
+    //    commits — without this step, `gates pass + merge succeeds`
+    //    would leave the session branch with zero of the worker's code.
+    const commitMessage = `forge: ${task.title} (task ${task.id})`;
+    let commitSha: string;
+    try {
+      commitSha = await this.git.commit(worktree.path, commitMessage, { all: true });
+    } catch (err) {
+      this.logger.error('Failed to commit worker output', {
+        taskId: task.id,
+        worktree: worktree.path,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return undefined;
+    }
+
+    // 6. Re-stat the diff so the artifact reflects what the commit
+    //    actually added. The worker's `git diff HEAD --stat` ran
+    //    pre-commit on a fresh worktree and ignored untracked files
+    //    (so it always reported 0). Now that the task commit exists,
+    //    diff it against the orchestrator's base branch.
+    try {
+      const commitDiff = await this.git.diffSinceBranch(worktree.path, baseBranch);
+      (artifact as { summary?: ProofArtifact['summary'] }).summary = {
+        files_changed: commitDiff.files,
+        lines_added: commitDiff.additions,
+        lines_removed: commitDiff.deletions,
+        tests_added: 0,
+        duration_seconds: artifact.summary?.duration_seconds ?? 0,
+      };
+    } catch {
+      // Keep the worker's earlier estimate.
+    }
+    (artifact as { commit_sha?: string }).commit_sha = commitSha;
+
+    // 7. Persist the finalized artifact (commit_sha + accurate diff
+    //    stats included).
+    await this.state.saveProofArtifact(this.currentGoalId, artifact);
 
     task.status = 'completed';
     task.completed_at = formatDate();
@@ -333,7 +373,9 @@ export class ForgeOrchestrator {
       .replace('{date}', new Date().toISOString().split('T')[0])
       .replace('{goal_slug}', goalSlug)
       .replace('{goal_id}', graph.goal_id)
-      .replace('{sessionId}', this.currentSessionId);
+      .replace('{goalId}', graph.goal_id)
+      .replace('{sessionId}', this.currentSessionId)
+      .replace('{session_id}', this.currentSessionId);
 
     // Create session branch from main
     const baseBranch = await this.git.currentBranch();

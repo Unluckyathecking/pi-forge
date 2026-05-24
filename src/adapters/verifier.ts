@@ -11,6 +11,7 @@ import { promisify } from 'node:util';
 import type { GateStatus, GateType, ProofArtifact, RiskScore } from '../core/types.js';
 import { GateError } from '../core/errors.js';
 import type { GateConfig, GateResult, VerifierPort } from '../ports/verifier.js';
+import { scrubbedEnv } from './git.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -56,6 +57,7 @@ export class LocalCommandVerifier implements VerifierPort {
         cwd: worktreePath,
         timeout: timeoutMs,
         maxBuffer: 10 * 1024 * 1024,
+        env: scrubbedEnv(),
       });
       const duration = Date.now() - start;
       const result: GateResult = {
@@ -173,6 +175,7 @@ export class LocalCommandVerifier implements VerifierPort {
       const { stdout } = await execFileAsync('git', ['diff', '--stat'], {
         cwd: worktreePath,
         maxBuffer: 10 * 1024 * 1024,
+        env: scrubbedEnv(),
       });
       const lines = stdout.trim().split('\n');
       const lastLine = lines[lines.length - 1];
@@ -300,6 +303,7 @@ export class LocalCommandVerifier implements VerifierPort {
       const { stdout } = await execFileAsync('git', ['diff'], {
         cwd: worktreePath,
         maxBuffer: 50 * 1024 * 1024,
+        env: scrubbedEnv(),
       });
       diff = stdout;
     } catch {

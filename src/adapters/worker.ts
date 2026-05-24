@@ -17,6 +17,7 @@ import { execFile } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import { scrubbedEnv } from './git.js';
 import type {
   AgentSessionEventLike,
   AuthStorageLike,
@@ -41,6 +42,25 @@ const DEFAULT_TOOLS: readonly string[] = ['read', 'edit', 'write', 'grep', 'ls']
 const DEFAULT_PROVIDER = 'kimi-coder';
 const DEFAULT_MODEL = 'kimi-for-coding';
 const SDK_PACKAGE = '@mariozechner/pi-coding-agent';
+
+/** Restricts `--provider` / `--model` flag values to a slug alphabet so a
+ *  hostile value cannot bend the SDK's resolver into reading arbitrary paths
+ *  or URL fragments. Mirrors `state.ts`'s `ID_PATTERN`. */
+const ID_PATTERN = /^[A-Za-z0-9_.-]+$/;
+function assertSafeIdentifier(value: string, field: string): void {
+  if (!ID_PATTERN.test(value)) {
+    throw new WorkerError(`Unsafe ${field}: contains characters outside [A-Za-z0-9_.-]`, { value });
+  }
+}
+
+/** Transient `errorMessage`-carrying event types the SDK emits during
+ *  recovery (auto-retry / compaction). The worker treats these as noise —
+ *  the terminal signal is `waitForIdle()` settling. */
+const TRANSIENT_ERROR_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'auto_retry_start',
+  'auto_retry_end',
+  'compaction_end',
+]);
 
 /**
  * Kimi-coder provider configuration. Mirrors `pi-kimi-coder/extensions/index.ts`
@@ -138,13 +158,19 @@ export class PiSdkWorkerAdapter implements WorkerPort {
     }
     this.providerName = options.providerName ?? DEFAULT_PROVIDER;
     this.modelId = options.modelId ?? DEFAULT_MODEL;
+    assertSafeIdentifier(this.providerName, 'providerName');
+    assertSafeIdentifier(this.modelId, 'modelId');
 
-    let mod: PiSdkModule;
+    // Load the SDK module as `unknown` so the structural guard below is the
+    // single source of truth — the previous upfront `as PiSdkModule` cast
+    // silenced TypeScript before any runtime check, which made the guard
+    // confusing to reason about under SDK version skew.
+    let mod: unknown;
     try {
       // Non-literal specifier so bundlers don't try to resolve the optional
       // peer dep at build time.
       const specifier = SDK_PACKAGE;
-      mod = (await import(specifier)) as PiSdkModule;
+      mod = await import(specifier);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       throw new WorkerError(
@@ -153,17 +179,23 @@ export class PiSdkWorkerAdapter implements WorkerPort {
       );
     }
 
+    const candidate = mod as {
+      readonly createAgentSession?: unknown;
+      readonly AuthStorage?: { readonly create?: unknown };
+      readonly ModelRegistry?: { readonly create?: unknown };
+    };
     if (
-      typeof mod.createAgentSession !== 'function' ||
-      typeof (mod.AuthStorage as { create?: unknown } | undefined)?.create !== 'function' ||
-      typeof (mod.ModelRegistry as { create?: unknown } | undefined)?.create !== 'function'
+      typeof candidate.createAgentSession !== 'function' ||
+      typeof candidate.AuthStorage?.create !== 'function' ||
+      typeof candidate.ModelRegistry?.create !== 'function'
     ) {
       throw new WorkerError(
         `${SDK_PACKAGE} resolved but is missing required exports (createAgentSession / AuthStorage / ModelRegistry)`,
         { projectRoot: this.projectRoot }
       );
     }
-    this.sdk = mod;
+    // Safe narrowing — we've structurally verified the three call sites.
+    this.sdk = candidate as PiSdkModule;
 
     // Wire the Kimi key into the env var the provider reads as its bearer.
     // Priority: explicit init option → existing env var → leave unset (Pi
@@ -174,8 +206,8 @@ export class PiSdkWorkerAdapter implements WorkerPort {
     }
 
     const agentDir = options.agentDir ?? join(homedir(), '.pi', 'agent');
-    this.authStorage = mod.AuthStorage.create(join(agentDir, 'auth.json'));
-    this.modelRegistry = mod.ModelRegistry.create(this.authStorage, join(agentDir, 'models.json'));
+    this.authStorage = this.sdk.AuthStorage.create(join(agentDir, 'auth.json'));
+    this.modelRegistry = this.sdk.ModelRegistry.create(this.authStorage, join(agentDir, 'models.json'));
     this.modelRegistry.registerProvider(this.providerName, KIMI_CODER_PROVIDER_CONFIG);
 
     const model = this.modelRegistry.find(this.providerName, this.modelId);
@@ -203,9 +235,17 @@ export class PiSdkWorkerAdapter implements WorkerPort {
 
     let lastError: string | undefined;
     const unsubscribe = session.subscribe((event: AgentSessionEventLike) => {
-      if (typeof event.errorMessage === 'string' && event.errorMessage.length > 0) {
-        lastError = event.errorMessage;
+      if (typeof event.errorMessage !== 'string' || event.errorMessage.length === 0) {
+        return;
       }
+      // Transient retry / compaction events also carry errorMessage but
+      // the SDK itself is recovering. Treat `waitForIdle()` as the
+      // terminal signal instead.
+      const type = typeof event.type === 'string' ? event.type : '';
+      if (TRANSIENT_ERROR_EVENT_TYPES.has(type)) {
+        return;
+      }
+      lastError = event.errorMessage;
     });
 
     try {
@@ -279,6 +319,7 @@ export class PiSdkWorkerAdapter implements WorkerPort {
       const result = await execFileAsync('git', ['diff', 'HEAD', '--stat'], {
         cwd: worktreePath,
         maxBuffer: 10 * 1024 * 1024,
+        env: scrubbedEnv(),
       });
       stdout = result.stdout;
     } catch (err) {

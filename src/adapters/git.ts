@@ -9,10 +9,48 @@ import { spawn } from 'node:child_process';
 import { GitError } from '../core/errors.js';
 import type { GitPort, MergeResult, WorktreeInfo } from '../ports/git.js';
 
+/**
+ * Env vars holding LLM credentials that should never leak to subprocesses
+ * pi-forge spawns (git, lint, typecheck, test, build, …). The worker still
+ * needs `KIMI_CODER_API_KEY` in `process.env` so Pi SDK can read it at
+ * request time, but we strip it on the way *out* to anything else.
+ */
+const SENSITIVE_ENV_VARS: readonly string[] = [
+  'KIMI_CODER_API_KEY',
+  'OPENAI_API_KEY',
+  'ANTHROPIC_API_KEY',
+  'KIMI_API_KEY',
+];
+
+export function scrubbedEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const key of SENSITIVE_ENV_VARS) {
+    delete env[key];
+  }
+  return env;
+}
+
 interface ExecResult {
   readonly stdout: string;
   readonly stderr: string;
   readonly exitCode: number;
+}
+
+function parseDiffStat(stdout: string): { files: number; additions: number; deletions: number } {
+  const trimmed = stdout.trim();
+  if (!trimmed) {
+    return { files: 0, additions: 0, deletions: 0 };
+  }
+  const lines = trimmed.split('\n');
+  const summaryLine = lines[lines.length - 1];
+  const filesMatch = /(\d+)\s+file/.exec(summaryLine);
+  const insertionsMatch = /(\d+)\s+insertion/.exec(summaryLine);
+  const deletionsMatch = /(\d+)\s+deletion/.exec(summaryLine);
+  return {
+    files: filesMatch !== null ? parseInt(filesMatch[1], 10) : 0,
+    additions: insertionsMatch !== null ? parseInt(insertionsMatch[1], 10) : 0,
+    deletions: deletionsMatch !== null ? parseInt(deletionsMatch[1], 10) : 0,
+  };
 }
 
 export function execGit(args: readonly string[], cwd?: string): Promise<ExecResult> {
@@ -20,7 +58,7 @@ export function execGit(args: readonly string[], cwd?: string): Promise<ExecResu
     const proc = spawn('git', args as string[], {
       cwd,
       shell: false,
-      env: process.env,
+      env: scrubbedEnv(),
     });
 
     let stdout = '';
@@ -78,7 +116,24 @@ export class GitCliAdapter implements GitPort {
       args.push(baseBranch);
     }
 
-    const { exitCode, stderr } = await execGit(args, this.repoRoot);
+    let { exitCode, stderr } = await execGit(args, this.repoRoot);
+
+    // Resilience: if a previous run left orphan worktree state (filesystem
+    // already gone but `.git/worktrees/<name>` still registered, or the
+    // branch ref still exists), recover and retry once.
+    if (exitCode !== 0) {
+      const stale =
+        stderr.includes('already exists') ||
+        stderr.includes('already checked out') ||
+        stderr.includes('missing but locked');
+
+      if (stale) {
+        await execGit(['worktree', 'prune'], this.repoRoot);
+        await execGit(['branch', '-D', branch], this.repoRoot);
+        ({ exitCode, stderr } = await execGit(args, this.repoRoot));
+      }
+    }
+
     if (exitCode !== 0) {
       throw new GitError(`Failed to create worktree at ${path}`, { path, branch, baseBranch, stderr });
     }
@@ -99,7 +154,12 @@ export class GitCliAdapter implements GitPort {
       }
     }
 
-    const { exitCode, stderr } = await execGit(['worktree', 'remove', path], this.repoRoot);
+    // --force so worktrees that the worker dirtied (the whole point — Kimi
+    // wrote source files that aren't committed) can still be torn down.
+    // Pi-forge owns the worktree lifecycle end-to-end; if cleanup needs to
+    // run, the in-flight diff has already been captured in the proof
+    // artifact and the worktree is purely ephemeral.
+    const { exitCode, stderr } = await execGit(['worktree', 'remove', '--force', path], this.repoRoot);
     if (exitCode !== 0) {
       throw new GitError(`Failed to remove worktree at ${path}`, { path, stderr });
     }
@@ -169,7 +229,17 @@ export class GitCliAdapter implements GitPort {
       args.push(base);
     }
 
-    const { exitCode, stderr } = await execGit(args, this.repoRoot);
+    let { exitCode, stderr } = await execGit(args, this.repoRoot);
+
+    // Re-runs of the same goal collide on the deterministic session
+    // branch name (template includes {date}+{goal_slug}, no timestamp).
+    // Treat existing branch as the legacy attempt — delete and recreate
+    // so the latest run is the authoritative session branch.
+    if (exitCode !== 0 && stderr.includes('already exists')) {
+      await execGit(['branch', '-D', branch], this.repoRoot);
+      ({ exitCode, stderr } = await execGit(args, this.repoRoot));
+    }
+
     if (exitCode !== 0) {
       throw new GitError(`Failed to create branch ${branch}`, { branch, base, stderr });
     }
@@ -189,14 +259,38 @@ export class GitCliAdapter implements GitPort {
   }
 
   async commit(path: string, message: string, options?: { all?: boolean }): Promise<string> {
+    // `all: true` means "include every change". `git commit -a` only stages
+    // tracked-file modifications — it misses untracked files (which is
+    // exactly what a worker writes). Run `git add -A` first so new files
+    // produced by the worker are also captured.
+    if (options?.all === true) {
+      const { exitCode: addCode, stderr: addErr } = await execGit(['add', '-A'], path);
+      if (addCode !== 0) {
+        throw new GitError(`Failed to stage changes in ${path}`, { path, stderr: addErr });
+      }
+    }
+
     const args = ['commit', '-m', message];
     if (options?.all === true) {
       args.push('-a');
     }
 
-    const { exitCode, stderr } = await execGit(args, path);
+    const { exitCode, stdout, stderr } = await execGit(args, path);
     if (exitCode !== 0) {
-      throw new GitError(`Failed to commit in ${path}`, { path, message, stderr });
+      // "nothing to commit" is a no-op success, not an error — happens
+      // when the worker didn't actually change anything (e.g. the task
+      // already started from a branch that had the diff). Git emits
+      // this on stdout, not stderr — check both.
+      const combined = `${stdout}\n${stderr}`;
+      if (
+        combined.includes('nothing to commit') ||
+        combined.includes('no changes added to commit') ||
+        combined.includes('nothing added to commit')
+      ) {
+        const { stdout: headSha } = await execGit(['rev-parse', 'HEAD'], path);
+        return headSha.trim();
+      }
+      throw new GitError(`Failed to commit in ${path}`, { path, message, stdout, stderr });
     }
 
     const { stdout: shaOut, exitCode: shaCode } = await execGit(['rev-parse', 'HEAD'], path);
@@ -211,24 +305,18 @@ export class GitCliAdapter implements GitPort {
     if (exitCode !== 0) {
       throw new GitError(`Failed to get diff stats for ${path}`, { path, stderr });
     }
+    return parseDiffStat(stdout);
+  }
 
-    const trimmed = stdout.trim();
-    if (!trimmed) {
-      return { files: 0, additions: 0, deletions: 0 };
+  async diffSinceBranch(
+    path: string,
+    baseBranch: string
+  ): Promise<{ files: number; additions: number; deletions: number }> {
+    const { stdout, exitCode, stderr } = await execGit(['diff', `${baseBranch}..HEAD`, '--stat'], path);
+    if (exitCode !== 0) {
+      throw new GitError(`Failed to get diff vs ${baseBranch} for ${path}`, { path, baseBranch, stderr });
     }
-
-    const lines = trimmed.split('\n');
-    const summaryLine = lines[lines.length - 1];
-
-    const filesMatch = summaryLine.match(/(\d+)\s+file/);
-    const insertionsMatch = summaryLine.match(/(\d+)\s+insertion/);
-    const deletionsMatch = summaryLine.match(/(\d+)\s+deletion/);
-
-    return {
-      files: filesMatch ? parseInt(filesMatch[1], 10) : 0,
-      additions: insertionsMatch ? parseInt(insertionsMatch[1], 10) : 0,
-      deletions: deletionsMatch ? parseInt(deletionsMatch[1], 10) : 0,
-    };
+    return parseDiffStat(stdout);
   }
 
   async merge(target: string, source: string, strategy?: 'merge' | 'rebase'): Promise<MergeResult> {

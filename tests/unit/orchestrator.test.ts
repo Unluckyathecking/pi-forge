@@ -55,6 +55,7 @@ function makeMockGit(): GitPort {
     currentBranch: jest.fn<GitPort['currentBranch']>().mockResolvedValue('main'),
     commit: jest.fn<GitPort['commit']>().mockResolvedValue('abc123'),
     diffStats: jest.fn<GitPort['diffStats']>().mockResolvedValue({ files: 1, additions: 10, deletions: 2 }),
+    diffSinceBranch: jest.fn<GitPort['diffSinceBranch']>().mockResolvedValue({ files: 2, additions: 50, deletions: 0 }),
     merge: jest.fn<GitPort['merge']>().mockResolvedValue({ success: true, conflicts: [] }),
     hasConflicts: jest.fn<GitPort['hasConflicts']>().mockResolvedValue(false),
     abortMerge: jest.fn<GitPort['abortMerge']>().mockResolvedValue(undefined),
@@ -277,5 +278,51 @@ describe('ForgeOrchestrator', () => {
     });
 
     await expect(orch.writeCheckpoint()).rejects.toThrow(/no active goal/i);
+  });
+
+  it('commits the worktree after gates pass and records commit_sha + diff', async () => {
+    const git = makeMockGit();
+    (git.commit as jest.Mock<GitPort['commit']>).mockResolvedValue('abc1234');
+    const state = makeMockState();
+    const verifier = makeMockVerifier();
+    const planner = makeMockPlanner();
+
+    const orch = new ForgeOrchestrator({
+      config: makeMockConfig(),
+      git,
+      state,
+      verifier,
+      planner,
+      logger: mockLogger,
+    });
+
+    const ledger = await orch.executeGoal('Ship feature');
+    expect(ledger.summary?.final_status).toBe('success');
+    expect(git.commit).toHaveBeenCalled();
+    const saveCalls = (state.saveProofArtifact as jest.Mock<StatePort['saveProofArtifact']>).mock.calls;
+    expect(saveCalls.length).toBeGreaterThan(0);
+    const lastArtifact = saveCalls[saveCalls.length - 1][1];
+    expect(lastArtifact.commit_sha).toBe('abc1234');
+    expect(lastArtifact.summary?.files_changed).toBe(2); // from diffSinceBranch mock
+  });
+
+  it('marks the task as failed if commit fails after gates pass', async () => {
+    const git = makeMockGit();
+    (git.commit as jest.Mock<GitPort['commit']>).mockRejectedValue(new Error('commit refused'));
+    const state = makeMockState();
+    const verifier = makeMockVerifier();
+    const planner = makeMockPlanner();
+
+    const orch = new ForgeOrchestrator({
+      config: makeMockConfig(),
+      git,
+      state,
+      verifier,
+      planner,
+      logger: mockLogger,
+    });
+
+    const ledger = await orch.executeGoal('Ship feature');
+    expect(ledger.summary?.tasks_failed).toBeGreaterThanOrEqual(1);
   });
 });

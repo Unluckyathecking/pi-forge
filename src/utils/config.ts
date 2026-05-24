@@ -62,8 +62,8 @@ proof_carrying:
     persist_path: ".pi/proofs"
 git:
   branch_prefix: "forge"
-  session_branch_template: "forge/session-{sessionId}"
-  task_branch_template: "forge/task-{taskId}"
+  session_branch_template: "forge/session-{date}-{goal_slug}"
+  task_branch_template: "forge/task-{task_id}-{slug}"
   worktree_base: ".pi/worktrees"
   auto_clean_worktrees: true
   retain_failed_branches: false
