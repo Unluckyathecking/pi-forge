@@ -1,15 +1,23 @@
-import { describe, it, expect } from '@jest/globals';
+import { describe, it, expect, afterEach, beforeEach, jest } from '@jest/globals';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   parseDurationMs,
   stripFailedSuffix,
   renderInspect,
   renderEntry,
   findActiveTask,
+  formatDuration,
+  renderGoalStats,
+  renderAggregateStats,
 } from '../../src/cli/index.js';
+import { FilesystemStateAdapter } from '../../src/adapters/state.js';
 import type {
   EvidenceEntry,
   EvidenceLedger,
   FailedTaskMarker,
+  TaskGraph,
 } from '../../src/core/types.js';
 
 describe('parseDurationMs', () => {
@@ -207,5 +215,272 @@ describe('findActiveTask', () => {
       fixtureEntry({ seq: 2, type: 'task_failed', task_id: 'implement' }),
     ]);
     expect(findActiveTask(ledger)).toBeUndefined();
+  });
+});
+
+// ── pi-forge stats helpers ──
+
+describe('formatDuration', () => {
+  it('returns ms suffix for sub-second durations', () => {
+    expect(formatDuration(500)).toBe('500ms');
+    expect(formatDuration(0)).toBe('0ms');
+    expect(formatDuration(999)).toBe('999ms');
+  });
+
+  it('returns seconds suffix for durations under a minute', () => {
+    expect(formatDuration(45_000)).toBe('45s');
+    expect(formatDuration(1_000)).toBe('1s');
+    expect(formatDuration(59_499)).toBe('59s');
+  });
+
+  it('returns "Nm Ss" for durations of one minute or more', () => {
+    expect(formatDuration(125_000)).toBe('2m 5s');
+    expect(formatDuration(60_000)).toBe('1m 0s');
+    expect(formatDuration(605_000)).toBe('10m 5s');
+  });
+});
+
+function makeGoalGraph(goalId: string, taskIds: string[]): TaskGraph {
+  return {
+    goal_id: goalId,
+    version: '1.0.0',
+    created_at: '2026-05-24T08:30:00.000Z',
+    tasks: taskIds.map((id, idx) => ({
+      id,
+      level: 2,
+      title: `Task ${id}`,
+      status: 'pending',
+      proof_requirements: [],
+      input_contracts: [],
+      output_contracts: [],
+      estimated_minutes: 5 + idx,
+    })),
+    edges: [],
+  };
+}
+
+function makeGoalLedger(
+  goalId: string,
+  entries: EvidenceEntry[],
+  summary?: EvidenceLedger['summary'],
+  closedAt?: string,
+): EvidenceLedger {
+  return {
+    goal_id: goalId,
+    version: '1.0.0',
+    created_at: '2026-05-24T08:30:00.000Z',
+    closed_at: closedAt,
+    entries,
+    summary,
+  };
+}
+
+describe('renderGoalStats', () => {
+  let workdir: string;
+  let adapter: FilesystemStateAdapter;
+  // We spy on console.log; preserve and restore the real implementation.
+  let logSpy: ReturnType<typeof jest.spyOn>;
+
+  beforeEach(async () => {
+    workdir = await mkdtemp(join(tmpdir(), 'pi-forge-stats-'));
+    adapter = new FilesystemStateAdapter();
+    await adapter.init(join(workdir, 'state'));
+    logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+  });
+
+  afterEach(async () => {
+    logSpy.mockRestore();
+    await rm(workdir, { recursive: true, force: true });
+  });
+
+  it('prints header, task table, and durations for a real ledger', async () => {
+    const goalId = 'goal-render-test';
+    const graph = makeGoalGraph(goalId, ['plan', 'implement', 'test']);
+    const ledger = makeGoalLedger(
+      goalId,
+      [
+        {
+          seq: 1,
+          timestamp: '2026-05-24T08:30:43.000Z',
+          type: 'task_started',
+          task_id: 'plan',
+          description: 'Start plan',
+        },
+        {
+          seq: 2,
+          timestamp: '2026-05-24T08:30:49.000Z',
+          type: 'task_completed',
+          task_id: 'plan',
+          description: 'Plan complete',
+        },
+        {
+          seq: 3,
+          timestamp: '2026-05-24T08:30:50.000Z',
+          type: 'task_started',
+          task_id: 'implement',
+          description: 'Start implement',
+        },
+        {
+          seq: 4,
+          timestamp: '2026-05-24T08:48:50.000Z',
+          type: 'task_failed',
+          task_id: 'implement',
+          description: 'Required gate(s) failed: typecheck',
+        },
+      ],
+      {
+        final_status: 'partial',
+        tasks_completed: 1,
+        tasks_failed: 1,
+      },
+      '2026-05-24T08:49:10.000Z',
+    );
+    await adapter.saveTaskGraph(goalId, graph);
+    // createEvidenceLedger must run first so saveEvidenceLedger can take a
+    // proper-lockfile lock on an existing path.
+    await adapter.createEvidenceLedger(goalId);
+    await adapter.saveEvidenceLedger(goalId, ledger);
+
+    await expect(renderGoalStats(adapter, goalId)).resolves.toBeUndefined();
+    const joined = logSpy.mock.calls.map((c) => String(c[0] ?? '')).join('\n');
+    expect(joined).toContain(goalId);
+    expect(joined).toContain('Tasks (3)');
+    // Plan completed in 6s, implement failed after 18m.
+    expect(joined).toContain('6s');
+    expect(joined).toContain('18m 0s');
+    // Skipped/unfinished task should render as skipped, not failed.
+    expect(joined).toContain('skipped');
+    // Failure reason from the task_failed entry should be surfaced.
+    expect(joined).toContain('typecheck');
+    // Header shows the final status.
+    expect(joined).toContain('partial');
+  });
+});
+
+describe('renderAggregateStats', () => {
+  let workdir: string;
+  let adapter: FilesystemStateAdapter;
+  let logSpy: ReturnType<typeof jest.spyOn>;
+
+  beforeEach(async () => {
+    workdir = await mkdtemp(join(tmpdir(), 'pi-forge-stats-agg-'));
+    adapter = new FilesystemStateAdapter();
+    await adapter.init(join(workdir, 'state'));
+    logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+  });
+
+  afterEach(async () => {
+    logSpy.mockRestore();
+    await rm(workdir, { recursive: true, force: true });
+  });
+
+  it('prints a friendly message when no runs exist', async () => {
+    await renderAggregateStats(adapter, 10);
+    const joined = logSpy.mock.calls.map((c) => String(c[0] ?? '')).join('\n');
+    expect(joined).toContain('No pi-forge runs');
+  });
+
+  it('aggregates goal + task counts across multiple ledgers', async () => {
+    // Goal A: success with two tasks (plan completed, implement completed).
+    const goalA = 'goal-a';
+    await adapter.saveTaskGraph(goalA, makeGoalGraph(goalA, ['plan', 'implement']));
+    await adapter.createEvidenceLedger(goalA);
+    await adapter.saveEvidenceLedger(
+      goalA,
+      makeGoalLedger(
+        goalA,
+        [
+          {
+            seq: 1,
+            timestamp: '2026-05-24T08:00:00.000Z',
+            type: 'task_started',
+            task_id: 'plan',
+            description: 'plan',
+          },
+          {
+            seq: 2,
+            timestamp: '2026-05-24T08:00:05.000Z',
+            type: 'task_completed',
+            task_id: 'plan',
+            description: 'done',
+          },
+          {
+            seq: 3,
+            timestamp: '2026-05-24T08:01:00.000Z',
+            type: 'task_started',
+            task_id: 'implement',
+            description: 'impl',
+          },
+          {
+            seq: 4,
+            timestamp: '2026-05-24T08:01:10.000Z',
+            type: 'task_completed',
+            task_id: 'implement',
+            description: 'done',
+          },
+        ],
+        { final_status: 'success', tasks_completed: 2, tasks_failed: 0 },
+        '2026-05-24T08:01:11.000Z',
+      ),
+    );
+    // Goal B: failure with one task failed.
+    const goalB = 'goal-b';
+    await adapter.saveTaskGraph(goalB, makeGoalGraph(goalB, ['implement']));
+    await adapter.createEvidenceLedger(goalB);
+    await adapter.saveEvidenceLedger(
+      goalB,
+      makeGoalLedger(
+        goalB,
+        [
+          {
+            seq: 1,
+            timestamp: '2026-05-24T09:00:00.000Z',
+            type: 'task_started',
+            task_id: 'implement',
+            description: 'impl',
+          },
+          {
+            seq: 2,
+            timestamp: '2026-05-24T09:00:30.000Z',
+            type: 'task_failed',
+            task_id: 'implement',
+            description: 'Required gate(s) failed: typecheck',
+          },
+        ],
+        { final_status: 'failure', tasks_completed: 0, tasks_failed: 1 },
+        '2026-05-24T09:00:31.000Z',
+      ),
+    );
+    // Add a failure proof so the most-common-failed-gates section renders.
+    await adapter.saveProofArtifact(goalB, {
+      artifact_id: 'proof-b-1',
+      task_id: 'implement',
+      goal_id: goalB,
+      version: '1.0.0',
+      timestamp: '2026-05-24T09:00:30.000Z',
+      agent_role: 'coder',
+      claims: [],
+      all_pass: false,
+      failed_gates: ['typecheck'],
+    });
+
+    await renderAggregateStats(adapter, 10);
+    const joined = logSpy.mock.calls.map((c) => String(c[0] ?? '')).join('\n');
+    expect(joined).toContain('Pi Forge — session statistics');
+    expect(joined).toContain('Goals:');
+    // 2 goals total, 1 success, 1 failure.
+    expect(joined).toContain('2');
+    expect(joined).toContain('success');
+    expect(joined).toContain('failure');
+    // 3 tasks total across the two goals (2 + 1).
+    expect(joined).toContain('Tasks:');
+    expect(joined).toContain('3');
+    // Most-common failed gates picks up the typecheck failure.
+    expect(joined).toContain('Most-common failed gates');
+    expect(joined).toContain('typecheck');
+    // Recent goals section appears with both goal ids.
+    expect(joined).toContain('Recent goals');
+    expect(joined).toContain(goalA);
+    expect(joined).toContain(goalB);
   });
 });
