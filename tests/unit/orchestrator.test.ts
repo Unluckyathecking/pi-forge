@@ -306,6 +306,121 @@ describe('ForgeOrchestrator', () => {
     expect(lastArtifact.summary?.files_changed).toBe(2); // from diffSinceBranch mock
   });
 
+  it('writes task_failed ledger entry when required gates fail (gate name in description)', async () => {
+    const git = makeMockGit();
+    const state = makeMockState();
+    const planner = makeMockPlanner();
+    const verifier: VerifierPort = {
+      ...makeMockVerifier(),
+      runAllGates: jest.fn<VerifierPort['runAllGates']>().mockResolvedValue([
+        { gate: 'lint', status: 'fail', command: 'eslint', exit_code: 1, output: 'lint exploded\nmore detail', duration_ms: 1 },
+      ]),
+    };
+
+    const orch = new ForgeOrchestrator({
+      config: makeMockConfig(),
+      git,
+      state,
+      verifier,
+      planner,
+      logger: mockLogger,
+    });
+
+    const ledger = await orch.executeGoal('Ship feature');
+    const failedEntries = ledger.entries.filter((e) => e.type === 'task_failed');
+    expect(failedEntries.length).toBeGreaterThanOrEqual(1);
+    expect(failedEntries[0].description).toMatch(/lint/);
+    expect(failedEntries[0].description).toMatch(/Required gate\(s\) failed/);
+  });
+
+  it('task_failed ledger entry includes error_code in data when gates fail', async () => {
+    const git = makeMockGit();
+    const state = makeMockState();
+    const planner = makeMockPlanner();
+    const verifier: VerifierPort = {
+      ...makeMockVerifier(),
+      runAllGates: jest.fn<VerifierPort['runAllGates']>().mockResolvedValue([
+        { gate: 'lint', status: 'fail', command: 'eslint', exit_code: 1, output: 'broken', duration_ms: 1 },
+      ]),
+    };
+
+    const orch = new ForgeOrchestrator({
+      config: makeMockConfig(),
+      git,
+      state,
+      verifier,
+      planner,
+      logger: mockLogger,
+    });
+
+    const ledger = await orch.executeGoal('Ship feature');
+    const failedEntries = ledger.entries.filter((e) => e.type === 'task_failed');
+    expect(failedEntries.length).toBeGreaterThanOrEqual(1);
+    const entry = failedEntries[0];
+    expect(entry.data).toBeDefined();
+    expect(entry.data?.error_code).toBe('GATES_FAILED');
+  });
+
+  it('Critical task failed log includes title and reason for level<=1 tasks', async () => {
+    const git = makeMockGit();
+    const state = makeMockState();
+    const verifier: VerifierPort = {
+      ...makeMockVerifier(),
+      runAllGates: jest.fn<VerifierPort['runAllGates']>().mockResolvedValue([
+        { gate: 'typecheck', status: 'fail', command: 'tsc', exit_code: 1, output: 'TS2304', duration_ms: 1 },
+      ]),
+    };
+    const planner: PlannerPort = {
+      ...makeMockPlanner(),
+      decompose: jest.fn<PlannerPort['decompose']>().mockResolvedValue({
+        goal_id: 'critical-goal',
+        version: '1.0.0',
+        created_at: new Date().toISOString(),
+        tasks: [
+          {
+            id: 't-critical',
+            level: 1,
+            title: 'Critical migration task',
+            status: 'pending',
+            proof_requirements: [{ gate: 'typecheck', required: true }],
+            input_contracts: [],
+            output_contracts: [],
+            estimated_minutes: 30,
+          },
+        ],
+        edges: [],
+      }),
+    };
+
+    const errorSpy = jest.fn();
+    const logger: Logger = {
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: errorSpy,
+      debug: jest.fn(),
+    };
+
+    const orch = new ForgeOrchestrator({
+      config: makeMockConfig(),
+      git,
+      state,
+      verifier,
+      planner,
+      logger,
+    });
+
+    await orch.executeGoal('Critical work');
+    const criticalCall = errorSpy.mock.calls.find(
+      (c) => c[0] === 'Critical task failed, aborting goal'
+    );
+    expect(criticalCall).toBeDefined();
+    const meta = criticalCall?.[1] as Record<string, unknown>;
+    expect(meta).toBeDefined();
+    expect(meta.title).toBe('Critical migration task');
+    expect(meta.level).toBe(1);
+    expect(meta.reason).toMatch(/typecheck/);
+  });
+
   it('marks the task as failed AND records task_failed entry if commit fails after gates pass', async () => {
     const git = makeMockGit();
     (git.commit as jest.Mock<GitPort['commit']>).mockRejectedValue(new Error('commit refused'));

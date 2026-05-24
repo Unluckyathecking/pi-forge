@@ -121,7 +121,15 @@ export class ForgeOrchestrator {
           failedTasks.add(task.id);
           // Stop if this task is critical (no downstream should run)
           if (task.level <= 1) {
-            this.logger.error('Critical task failed, aborting goal', { taskId: task.id });
+            const lastFailure = [...ledger.entries].reverse().find(
+              (e) => e.type === 'task_failed' && e.task_id === task.id
+            );
+            this.logger.error('Critical task failed, aborting goal', {
+              taskId: task.id,
+              title: task.title,
+              level: task.level,
+              reason: lastFailure?.description ?? 'unknown',
+            });
             break;
           }
         }
@@ -203,7 +211,20 @@ export class ForgeOrchestrator {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.error('Task failed', { taskId: task.id, error: message });
-      this.appendEntry(ledger, 'task_failed', message, undefined, task.id);
+      const data: Record<string, unknown> = {};
+      if (err instanceof OrchestratorError) {
+        data.error_code = err.code;
+        if (err.context !== undefined) {
+          Object.assign(data, err.context);
+        }
+      }
+      this.appendEntry(
+        ledger,
+        'task_failed',
+        message,
+        Object.keys(data).length > 0 ? data : undefined,
+        task.id
+      );
       return false;
     }
   }
@@ -303,11 +324,36 @@ export class ForgeOrchestrator {
     });
 
     if (!allRequiredPass || risk.decision === 'auto_deny') {
+      const failedGates = gateResults.filter((g) => g.status === 'fail');
+      const failureReason =
+        failedGates.length > 0
+          ? `Required gate(s) failed: ${failedGates.map((g) => g.gate).join(', ')}`
+          : `Risk gate auto_deny (score ${risk.score})`;
+      const firstErrorLine =
+        failedGates[0]?.output.split('\n').find((l) => l.trim().length > 0) ?? '';
+
+      this.logger.error('Task failure detected', {
+        taskId: task.id,
+        failed_gates: failedGates.map((g) => g.gate),
+        first_error_line: firstErrorLine.substring(0, 200),
+        risk_score: risk.score,
+        risk_decision: risk.decision,
+      });
+
       // Clean up worktree on failure
       if (this.config.git.auto_clean_worktrees) {
         await this.git.destroyWorktree(worktree.path, !this.config.git.retain_failed_branches);
       }
-      return undefined;
+
+      // Throw instead of returning undefined so executeTask catches it and
+      // writes an enriched task_failed ledger entry. Previously, returning
+      // undefined left the ledger silent on gate failures.
+      throw new OrchestratorError(failureReason, 'GATES_FAILED', {
+        failed_gates: failedGates.map((g) => g.gate),
+        first_error_line: firstErrorLine.substring(0, 200),
+        risk_score: risk.score,
+        risk_decision: risk.decision,
+      });
     }
 
     // 5. Commit the worker's edits so the merge step has something to
