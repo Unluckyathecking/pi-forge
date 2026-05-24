@@ -6,6 +6,42 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-05-24
+
+Phase 4 — first-class observability + preserved-worktree polish.
+Operators stop writing their own `jq` + cron loops to monitor runs,
+and v1.3.0's preservation flow stops confusing parent-project
+tooling.
+
+### Added
+
+- **`pi-forge watch <goal_id>` subcommand.** Tails
+  `.pi/state/evidence/<goal>/ledger.json` every `--interval` ms
+  (default 2000) and prints new entries with colored status badges
+  + the currently-running task's worktree activity (file count +
+  most-recent modified path, throttled to 30s heartbeat). Exits
+  when `ledger.summary.final_status` is set (exit code 0 on
+  success, 1 otherwise). Clean SIGINT handling. Waits up to 10s
+  for the ledger to exist (race against forge startup).
+- **`renderEntry`, `findActiveTask`, `readWorktreeStats`** helpers
+  exported from CLI for testability — 4 new unit tests cover them.
+- **Preserved-worktree tooling isolation.** When
+  `failed_task_behavior: 'preserve'`, the orchestrator now writes
+  `<preserved>/.eslintignore` and `<preserved>/.gitignore` (each
+  containing `*\n`) inside the renamed worktree. Solves the
+  `"No tsconfigRootDir was set, multiple candidate roots present"`
+  error that parent-project eslint produces when walking up into a
+  preserved worktree containing its own tsconfig + package.json.
+  Each marker write is independently try/catch-wrapped — failure on
+  one doesn't block the other or abort preservation.
+
+### Backwards compatibility
+
+- New `watch` subcommand — additive.
+- Preserved-worktree markers — additive. Files are written only when
+  `failed_task_behavior !== 'purge'`. Failures are warnings, not
+  errors.
+
 ## [1.4.0] — 2026-05-24
 
 Phase 3 — smart planner + honest test gate. Operators stop paying
