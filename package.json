@@ -1,6 +1,6 @@
 {
   "name": "pi-forge",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "Pi Forge — Proof-carrying, hexagonal-core, multi-level autonomous coding factory",
   "type": "module",
   "main": "dist/index.js",

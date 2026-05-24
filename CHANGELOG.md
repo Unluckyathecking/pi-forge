@@ -6,6 +6,39 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.7.0] — 2026-05-24
+
+Phase 6 — operator UX capstone. PLAN.md quality is the #1 determinant
+of pi-forge run success; operators no longer have to hand-write 400+
+line specs from scratch.
+
+### Added
+
+- **`pi-forge init-plan` subcommand** — scaffolds a comprehensive
+  PLAN.md via 7 interactive readline prompts (default) or
+  `--no-prompt` for CI use. Output is a 200-250 line skeleton with
+  all 15 structural sections that materially affect pi-forge run
+  success: Goal, Scope (In/Out), File Map (scaled to user's file
+  counts), Type Contracts, Behaviour Matrix, CSS additions (TS/JS
+  only), Gate Expectations, Gate-iteration protocol, Strict-mode
+  survival guide, ESLint rules (TS/JS only), Verbatim code patterns,
+  Common-failures checklist, Task-DAG guidance, Demo flow, Self-check.
+- **Project-type detection** in `src/cli/plan-template.ts`. Inspects
+  `Cargo.toml` → rust, `go.mod` → go, `pyproject.toml`/`setup.py` →
+  python, `package.json` (with TypeScript hint) → typescript /
+  javascript. Template tailors gate commands, strict-mode rules, and
+  type-contract language stubs accordingly.
+- **Existing-file safety**: prompts to confirm overwrite when
+  `PLAN.md` already exists. `--no-prompt` mode auto-overwrites for CI
+  semantics.
+
+### Notes
+
+- Uses `node:readline` async-iterator pattern (not
+  `node:readline/promises`) to handle piped stdin correctly.
+- Pure `renderPlanMarkdown` and `detectProjectType` helpers exported
+  for testability (20 new tests).
+
 ## [1.6.0] — 2026-05-24
 
 Phase 5 — operator extensibility + analytics. Hooks let operators
