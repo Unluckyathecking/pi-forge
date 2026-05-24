@@ -6,6 +6,80 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-05-24
+
+Phase 2 — failed-worktree preservation. Pi-forge can now preserve the
+worktree, auto-commit dirty state, tag the failure SHA at a custom
+ref, and write a sidecar marker so operators can inspect, salvage, or
+purge the failure on their own schedule. Three new CLI subcommands
+expose the workflow.
+
+### Added
+
+- **`git.failed_task_behavior` config key** with three modes:
+  - `"purge"` (default) — destroy worktree + branch. v1.2.x behaviour.
+  - `"preserve"` — auto-commit dirty state, tag SHA at
+    `refs/forge/failed/<goal>/<task>`, rename worktree to
+    `<path><suffix>`, write `FailedTaskMarker` sidecar.
+  - `"tag-and-purge"` — tag the dirty SHA but destroy the worktree
+    (lightweight; tag survives for later `git checkout`).
+- **`git.failed_worktree_suffix` config key** (default `".failed"`).
+  Collisions handled by appending unix-timestamp suffix.
+- **`--keep-on-fail` CLI flag** continues to work — now equivalent
+  to setting `failed_task_behavior: "preserve"`.
+- **`FailedTaskMarker` type** in `src/core/types.ts` — central record
+  of a preserved failed task (task/goal ids, branch + tag_ref +
+  commit_sha, gate summary, files_modified, recovery_hint,
+  operator_commands). Written to
+  `.pi/state/failed-tasks/<task-id>.json` and duplicated as
+  `<worktree>/.pi-failed.json` for in-tree discoverability.
+- **State port CRUD** for failed markers: `saveFailedMarker`,
+  `loadFailedMarker`, `listFailedMarkers`, `deleteFailedMarker`.
+- **Git port primitives** for preservation:
+  - `moveWorktree(from, to)` — `git worktree move` with collision
+    handling (target-exists → append unix-ts suffix).
+  - `updateRef(ref, sha)` — `git update-ref`. Used to tag failed-task
+    SHAs at `refs/forge/failed/<g>/<t>`, surviving branch deletion.
+  - `deleteRef(ref)` — `git update-ref -d`. Used by `cleanup --failed`.
+  - `listRefs(prefix)` — `git for-each-ref`. Enumerates preserved
+    failures.
+- **Orchestrator preservation flow** (`ForgeOrchestrator.preserveFailedTask`)
+  — 6 steps wrapped in try/catch so a failure in one (e.g., stale
+  ref) doesn't abort the others:
+  1. Commit dirty state with `wip(<task>): preserved on <gate> failure`.
+  2. Tag the SHA at `refs/forge/failed/<goal>/<task>`.
+  3. Preserve worktree (rename) or destroy (tag-and-purge).
+  4. Save `FailedTaskMarker` to central index.
+  5. Write `<worktree>/.pi-failed.json` sidecar.
+  6. Emit `'Task failure preserved'` log with operator-action hints.
+- **Three new CLI subcommands**:
+  - `pi-forge cleanup --failed [--older-than 7d] [--task <id>] [--yes]`
+    — purge preserved failures (worktree + tag + marker). Requires
+    `--yes` for non-empty purges (CI-friendly); the dry run lists
+    candidates.
+  - `pi-forge inspect <task-id>` — structured marker summary: header,
+    gate table (name / status / exit_code / first stderr line), diff
+    stats, recovery hint, ready-to-copy operator commands. Tails
+    `git status --porcelain` from the live worktree when present.
+  - `pi-forge salvage <task-id> [--to-branch <name>]` — promote
+    preserved failure to a regular branch: rename worktree to drop
+    `.failed`, rename branch via `git branch -m`, delete tag + marker.
+    Default target branch `salvaged/<task-id>`.
+- **`parseDurationMs` helper** for `--older-than` (e.g. `7d`, `24h`,
+  `30m`).
+
+### Backwards compatibility
+
+- `failed_task_behavior` defaults to `'purge'` — v1.2.x behaviour
+  unchanged unless operator opts in.
+- All new config keys use `.default()` in Zod — legacy `config.yaml`
+  files missing the keys parse cleanly.
+- `preserve_worktree_on_failure: true` (from v1.2.2) is shorthand for
+  `failed_task_behavior: "preserve"` — existing configs continue to
+  work.
+- `FailedTaskMarker` is a new type, additive only. Existing
+  `ProofArtifact` schema unchanged.
+
 ## [1.2.2] — 2026-05-24
 
 Phase 0+1 debuggability + escape-hatch patch. Failed runs are now
