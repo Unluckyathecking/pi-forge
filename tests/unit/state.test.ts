@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FilesystemStateAdapter } from '../../src/adapters/state.js';
 import { StateError } from '../../src/core/errors.js';
-import type { EvidenceLedger, ProofArtifact, TaskGraph } from '../../src/core/types.js';
+import type { EvidenceLedger, FailedTaskMarker, ProofArtifact, TaskGraph } from '../../src/core/types.js';
 
 function makeGraph(goalId: string): TaskGraph {
   return {
@@ -177,5 +177,60 @@ describe('FilesystemStateAdapter', () => {
     await expect(
       adapter.saveProofArtifact('safe-id', { ...makeArtifact('safe-id', '../bad'), artifact_id: '../bad' })
     ).rejects.toBeInstanceOf(StateError);
+  });
+
+  function makeMarker(taskId: string): FailedTaskMarker {
+    return {
+      task_id: taskId,
+      goal_id: 'g1',
+      failed_at: '2026-05-24T00:00:00.000Z',
+      failure_kind: 'gate_failure',
+      branch: `forge/task-${taskId}`,
+      tag_ref: `refs/forge/failed/g1/${taskId}`,
+      commit_sha: 'a'.repeat(40),
+      wip_commit_was_empty: false,
+      worktree_path: `/tmp/wt/${taskId}.failed`,
+      gates: [{ name: 'typecheck', status: 'fail', exit_code: 2, stderr_first_line: 'TS2304' }],
+      files_modified: ['src/foo.ts'],
+      lines_added: 10,
+      lines_removed: 2,
+      recovery_hint: 'inspect to see',
+      operator_commands: { inspect: 'pi-forge inspect t1', salvage: 'pi-forge salvage t1', retry: 'pi-forge retry t1', purge: 'pi-forge cleanup --task t1' },
+    };
+  }
+
+  it('saveFailedMarker + loadFailedMarker roundtrip', async () => {
+    const marker = makeMarker('task1');
+    await adapter.saveFailedMarker(marker);
+    const loaded = await adapter.loadFailedMarker('task1');
+    expect(loaded).toEqual(marker);
+  });
+
+  it('loadFailedMarker returns undefined for unknown id', async () => {
+    const loaded = await adapter.loadFailedMarker('does-not-exist');
+    expect(loaded).toBeUndefined();
+  });
+
+  it('listFailedMarkers returns task ids', async () => {
+    await adapter.saveFailedMarker(makeMarker('a'));
+    await adapter.saveFailedMarker(makeMarker('b'));
+    const ids = await adapter.listFailedMarkers();
+    expect(ids.sort()).toEqual(['a', 'b']);
+  });
+
+  it('deleteFailedMarker is idempotent on missing ids', async () => {
+    await expect(adapter.deleteFailedMarker('not-there')).resolves.toBeUndefined();
+  });
+
+  it('deleteFailedMarker removes existing markers', async () => {
+    await adapter.saveFailedMarker(makeMarker('z'));
+    expect(await adapter.loadFailedMarker('z')).toBeDefined();
+    await adapter.deleteFailedMarker('z');
+    expect(await adapter.loadFailedMarker('z')).toBeUndefined();
+  });
+
+  it('saveFailedMarker rejects unsafe taskId', async () => {
+    const marker = { ...makeMarker('../escape'), task_id: '../escape' };
+    await expect(adapter.saveFailedMarker(marker)).rejects.toThrow(StateError);
   });
 });

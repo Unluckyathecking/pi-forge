@@ -10,6 +10,7 @@ import type {
   StateCheckpoint,
   TaskGraph,
   ProofArtifact,
+  FailedTaskMarker,
 } from '../core/types.js';
 
 export interface StatePort {
@@ -39,6 +40,12 @@ export interface StatePort {
   saveCheckpoint(checkpoint: StateCheckpoint): Promise<void>;
   loadCheckpoint(checkpointId: string): Promise<StateCheckpoint | undefined>;
   listCheckpoints(goalId: string): Promise<StateCheckpoint[]>;
+
+  // ── Failed-task markers (Phase 2 preservation) ──
+  saveFailedMarker(marker: FailedTaskMarker): Promise<void>;
+  loadFailedMarker(taskId: string): Promise<FailedTaskMarker | undefined>;
+  listFailedMarkers(): Promise<string[]>;  // returns task_ids
+  deleteFailedMarker(taskId: string): Promise<void>;
 
   /** Health check */
   health(): Promise<{ ok: boolean; message?: string }>;
