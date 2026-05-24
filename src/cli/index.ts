@@ -6,9 +6,11 @@
  */
 
 import { spawn } from 'node:child_process';
-import { readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { createInterface, type Interface as ReadlineInterface } from 'node:readline';
+import { stdin, stdout } from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Command } from 'commander';
 import chalk from 'chalk';
@@ -22,6 +24,8 @@ import { PiSdkWorkerAdapter } from '../adapters/worker.js';
 import { loadConfig } from '../utils/config.js';
 import { createLogger } from '../utils/logger.js';
 import { ForgeError } from '../core/errors.js';
+import { detectProjectType, renderPlanMarkdown } from './plan-template.js';
+import type { PlanTemplateInput, ProjectType } from './plan-template.js';
 import type {
   EvidenceEntry,
   EvidenceLedger,
@@ -483,6 +487,202 @@ program
       process.exit(1);
     }
   });
+
+interface InitPlanCommandOptions {
+  // Commander rewrites `--no-prompt` to `prompt: false` (negated boolean).
+  // Default is `true` when the flag is absent.
+  readonly prompt?: boolean;
+  readonly output?: string;
+  readonly goal?: string;
+  readonly scopeIn?: string;
+  readonly scopeOut?: string;
+}
+
+const DEFAULT_STRICT_PREFS: readonly string[] = [
+  'no-any',
+  'no-as',
+  'no-console-log',
+  'import-type',
+  'verbatim-module-syntax',
+];
+
+program
+  .command('init-plan')
+  .description('Scaffold a comprehensive PLAN.md interactively (or with --no-prompt)')
+  .option('--no-prompt', 'Skip prompts; use --goal/--scope-in/--scope-out + placeholders for the rest')
+  .option('--goal <text>', 'Goal sentence (≤200 chars). Required with --no-prompt.')
+  .option('--scope-in <list>', 'Comma-separated in-scope items')
+  .option('--scope-out <list>', 'Comma-separated out-of-scope items')
+  .option('--output <path>', 'Output path (default ./PLAN.md)', './PLAN.md')
+  .action(async (options: InitPlanCommandOptions) => {
+    try {
+      const outputPath = resolve(options.output ?? './PLAN.md');
+      const projectType = detectProjectType(process.cwd());
+
+      const interactive = options.prompt !== false;
+
+      let input: PlanTemplateInput;
+      if (!interactive) {
+        if (options.goal === undefined || options.goal.length === 0) {
+          console.error(chalk.red('--no-prompt requires --goal'));
+          process.exit(1);
+          return;
+        }
+        input = {
+          goal: options.goal,
+          scopeIn: splitCsv(options.scopeIn ?? ''),
+          scopeOut: splitCsv(options.scopeOut ?? ''),
+          newFilesEstimate: 0,
+          editedFilesEstimate: 0,
+          strictPrefs: DEFAULT_STRICT_PREFS,
+          includeUnitTests: false,
+          projectType,
+        };
+      } else {
+        input = await runInitPlanPrompts(projectType);
+      }
+
+      if (existsSync(outputPath)) {
+        const overwrite = !interactive
+          ? true // --no-prompt + existing PLAN.md = overwrite (CI semantics).
+          : await confirmOverwrite(outputPath);
+        if (!overwrite) {
+          console.log(chalk.yellow('Aborted (existing PLAN.md preserved).'));
+          return;
+        }
+      }
+
+      const markdown = renderPlanMarkdown(input);
+      writeFileSync(outputPath, markdown, 'utf-8');
+      const lineCount = markdown.split('\n').length;
+      console.log(chalk.green(`✓ wrote ${outputPath} (${lineCount} lines)`));
+      console.log();
+      console.log(chalk.bold('Next steps:'));
+      console.log(
+        chalk.gray(
+          `  1. Edit ${outputPath} to fill in your specific File Map, Type Contracts, and Behaviour Matrix.`,
+        ),
+      );
+      console.log(
+        chalk.gray(
+          `  2. Commit: git add ${outputPath} && git commit -m "docs: PLAN.md for <goal>"`,
+        ),
+      );
+      console.log(
+        chalk.gray(
+          `  3. Fire: pi-forge forge "feature: Execute PLAN.md to <goal>"`,
+        ),
+      );
+    } catch (err) {
+      handleError(err);
+      process.exit(1);
+    }
+  });
+
+function splitCsv(raw: string): readonly string[] {
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+/**
+ * Async-iterator backed prompt helper. The classic `readline/promises`
+ * `rl.question()` API has a known sharp edge with piped stdin where only the
+ * first call resolves; using the iterator side of the interface avoids that
+ * trap and works identically in real terminals.
+ */
+async function askLine(
+  iter: AsyncIterator<string>,
+  prompt: string,
+): Promise<string> {
+  stdout.write(prompt);
+  const result = await iter.next();
+  if (result.done === true) return '';
+  return typeof result.value === 'string' ? result.value : '';
+}
+
+async function runInitPlanPrompts(projectType: ProjectType): Promise<PlanTemplateInput> {
+  const rl: ReadlineInterface = createInterface({ input: stdin, output: stdout });
+  const iter = rl[Symbol.asyncIterator]();
+  console.log(chalk.bold('pi-forge init-plan — scaffold a comprehensive PLAN.md\n'));
+  console.log(chalk.gray(`Detected project: ${projectType}\n`));
+  try {
+    const goalRaw = await askLine(
+      iter,
+      chalk.cyan('1/7  Goal (one declarative sentence, ≤200 chars):\n> '),
+    );
+    const scopeInRaw = await askLine(
+      iter,
+      chalk.cyan('\n2/7  Scope IN (comma-separated):\n> '),
+    );
+    const scopeOutRaw = await askLine(
+      iter,
+      chalk.cyan('\n3/7  Scope OUT (comma-separated):\n> '),
+    );
+    const newFilesRaw = await askLine(
+      iter,
+      chalk.cyan('\n4/7  How many NEW files? (rough estimate) [10]\n> '),
+    );
+    const editedFilesRaw = await askLine(
+      iter,
+      chalk.cyan('\n5/7  How many EXISTING files to edit? [9]\n> '),
+    );
+    const strictRaw = await askLine(
+      iter,
+      chalk.cyan(
+        `\n6/7  Strict-mode preferences (comma-separated; defaults: ${DEFAULT_STRICT_PREFS.join(
+          ', ',
+        )}):\n> `,
+      ),
+    );
+    const testsRaw = await askLine(
+      iter,
+      chalk.cyan('\n7/7  Will you write unit tests? [y/N]\n> '),
+    );
+
+    const goal = goalRaw.trim().length > 0 ? goalRaw.trim() : '<TODO: goal sentence>';
+    const newFiles = parseEstimate(newFilesRaw, 10);
+    const editedFiles = parseEstimate(editedFilesRaw, 9);
+    const strictPrefs =
+      strictRaw.trim().length === 0 ? DEFAULT_STRICT_PREFS : splitCsv(strictRaw);
+    return {
+      goal,
+      scopeIn: splitCsv(scopeInRaw),
+      scopeOut: splitCsv(scopeOutRaw),
+      newFilesEstimate: newFiles,
+      editedFilesEstimate: editedFiles,
+      strictPrefs,
+      includeUnitTests: /^y/i.test(testsRaw.trim()),
+      projectType,
+    };
+  } finally {
+    rl.close();
+  }
+}
+
+function parseEstimate(raw: string, fallback: number): number {
+  const parsed = parseInt(raw.trim(), 10);
+  return Number.isNaN(parsed) || parsed < 0 ? fallback : parsed;
+}
+
+async function confirmOverwrite(path: string): Promise<boolean> {
+  const rl: ReadlineInterface = createInterface({ input: stdin, output: stdout });
+  const iter = rl[Symbol.asyncIterator]();
+  try {
+    const ans = await askLine(
+      iter,
+      chalk.yellow(`${path} already exists. Overwrite? [y/N] `),
+    );
+    return /^y/i.test(ans.trim());
+  } finally {
+    rl.close();
+  }
+}
+
+// Re-export for testing — keeps the test file pointing at one entry module.
+export { detectProjectType, renderPlanMarkdown } from './plan-template.js';
+export type { PlanTemplateInput, ProjectType } from './plan-template.js';
 
 // Only auto-parse when invoked as the entry script (the `pi-forge` bin).
 // Guarding this keeps `import { ... } from '../../src/cli/index.js'` safe

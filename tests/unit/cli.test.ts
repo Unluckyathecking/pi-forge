@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, beforeEach, jest } from '@jest/globals';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -11,7 +11,10 @@ import {
   formatDuration,
   renderGoalStats,
   renderAggregateStats,
+  detectProjectType,
+  renderPlanMarkdown,
 } from '../../src/cli/index.js';
+import type { PlanTemplateInput } from '../../src/cli/index.js';
 import { FilesystemStateAdapter } from '../../src/adapters/state.js';
 import type {
   EvidenceEntry,
@@ -482,5 +485,186 @@ describe('renderAggregateStats', () => {
     expect(joined).toContain('Recent goals');
     expect(joined).toContain(goalA);
     expect(joined).toContain(goalB);
+  });
+});
+
+// ── pi-forge init-plan helpers ──
+
+function planInput(overrides: Partial<PlanTemplateInput> = {}): PlanTemplateInput {
+  return {
+    goal: 'Test goal',
+    scopeIn: ['alpha', 'beta'],
+    scopeOut: ['gamma'],
+    newFilesEstimate: 2,
+    editedFilesEstimate: 1,
+    strictPrefs: ['no-any', 'no-as'],
+    includeUnitTests: false,
+    projectType: 'typescript',
+    ...overrides,
+  };
+}
+
+describe('detectProjectType', () => {
+  let workdir: string;
+
+  beforeEach(async () => {
+    workdir = await mkdtemp(join(tmpdir(), 'pi-forge-detect-'));
+  });
+
+  afterEach(async () => {
+    await rm(workdir, { recursive: true, force: true });
+  });
+
+  it("returns 'typescript' for package.json with a typescript devDep", async () => {
+    await writeFile(
+      join(workdir, 'package.json'),
+      JSON.stringify({
+        name: 'x',
+        devDependencies: { typescript: '^5.0.0' },
+      }),
+      'utf-8',
+    );
+    expect(detectProjectType(workdir)).toBe('typescript');
+  });
+
+  it("returns 'javascript' for package.json without TypeScript hints", async () => {
+    await writeFile(
+      join(workdir, 'package.json'),
+      JSON.stringify({ name: 'x', main: 'index.js' }),
+      'utf-8',
+    );
+    expect(detectProjectType(workdir)).toBe('javascript');
+  });
+
+  it("returns 'rust' when Cargo.toml is present", async () => {
+    await writeFile(
+      join(workdir, 'Cargo.toml'),
+      '[package]\nname = "x"\n',
+      'utf-8',
+    );
+    expect(detectProjectType(workdir)).toBe('rust');
+  });
+
+  it("returns 'go' when go.mod is present", async () => {
+    await writeFile(join(workdir, 'go.mod'), 'module example.com/x\n', 'utf-8');
+    expect(detectProjectType(workdir)).toBe('go');
+  });
+
+  it("returns 'python' for pyproject.toml", async () => {
+    await writeFile(
+      join(workdir, 'pyproject.toml'),
+      '[project]\nname = "x"\n',
+      'utf-8',
+    );
+    expect(detectProjectType(workdir)).toBe('python');
+  });
+
+  it("returns 'unknown' when no recognised project file is present", () => {
+    expect(detectProjectType(workdir)).toBe('unknown');
+  });
+
+  it('prefers rust over python when both Cargo.toml and pyproject.toml exist', async () => {
+    // Rust detection runs before Python in the chain — this guards the order.
+    await writeFile(join(workdir, 'Cargo.toml'), '[package]\nname="x"\n', 'utf-8');
+    await writeFile(join(workdir, 'pyproject.toml'), '[project]\nname="x"\n', 'utf-8');
+    expect(detectProjectType(workdir)).toBe('rust');
+  });
+});
+
+describe('renderPlanMarkdown', () => {
+  it('includes the goal sentence under §1 Goal', () => {
+    const md = renderPlanMarkdown(planInput({ goal: 'Ship the MVP today' }));
+    expect(md).toContain('## 1. Goal');
+    expect(md).toContain('Ship the MVP today');
+  });
+
+  it('renders scope-in items as bullet list items under §2', () => {
+    const md = renderPlanMarkdown(
+      planInput({ scopeIn: ['real-time animation', 'fallback mode'] }),
+    );
+    expect(md).toContain('## 2. Scope');
+    expect(md).toContain('### In scope');
+    expect(md).toContain('- real-time animation');
+    expect(md).toContain('- fallback mode');
+  });
+
+  it('renders scope-out items as bullet list items', () => {
+    const md = renderPlanMarkdown(
+      planInput({ scopeOut: ['backend', 'production hardening'] }),
+    );
+    expect(md).toContain('### Out of scope');
+    expect(md).toContain('- backend');
+    expect(md).toContain('- production hardening');
+  });
+
+  it('scales the File Map row count to newFilesEstimate', () => {
+    const md = renderPlanMarkdown(
+      planInput({ newFilesEstimate: 5, editedFilesEstimate: 0 }),
+    );
+    // Each scaffolded NEW row carries the literal " | NEW | " column.
+    const newRowCount = (md.match(/\| NEW \|/g) ?? []).length;
+    expect(newRowCount).toBeGreaterThanOrEqual(5);
+  });
+
+  it('scales the File Map row count to editedFilesEstimate', () => {
+    const md = renderPlanMarkdown(
+      planInput({ newFilesEstimate: 0, editedFilesEstimate: 4 }),
+    );
+    const editRowCount = (md.match(/\| EDIT \|/g) ?? []).length;
+    expect(editRowCount).toBeGreaterThanOrEqual(4);
+  });
+
+  it('emits the ESLint section for TypeScript projects', () => {
+    const md = renderPlanMarkdown(planInput({ projectType: 'typescript' }));
+    expect(md).toContain('§C. ESLint rules');
+  });
+
+  it('omits the ESLint section for non-frontend projects', () => {
+    const md = renderPlanMarkdown(planInput({ projectType: 'rust' }));
+    expect(md).not.toContain('§C. ESLint rules');
+  });
+
+  it('emits Rust-specific gate commands for rust projects', () => {
+    const md = renderPlanMarkdown(planInput({ projectType: 'rust' }));
+    expect(md).toContain('cargo clippy');
+    expect(md).toContain('cargo test');
+    expect(md).not.toContain('npm run lint');
+  });
+
+  it('emits Python-specific gate commands for python projects', () => {
+    const md = renderPlanMarkdown(planInput({ projectType: 'python' }));
+    expect(md).toContain('pytest');
+    expect(md).toContain('ruff check');
+  });
+
+  it('includes the gate-iteration protocol verbatim', () => {
+    const md = renderPlanMarkdown(planInput());
+    expect(md).toContain('§A. Gate-iteration protocol');
+    expect(md).toContain('Stage one file at a time');
+    expect(md).toContain('Never disable a gate');
+  });
+
+  it('includes the common-failures checklist', () => {
+    const md = renderPlanMarkdown(planInput());
+    expect(md).toContain('§E. Common-failures checklist');
+    expect(md).toContain('Scope creep');
+    expect(md).toContain('No silenced gates');
+  });
+
+  it('lists the operator-supplied strict prefs in §B', () => {
+    const md = renderPlanMarkdown(
+      planInput({ strictPrefs: ['custom-rule-x', 'custom-rule-y'] }),
+    );
+    expect(md).toContain('§B. Strict-mode survival guide');
+    expect(md).toContain('custom-rule-x');
+    expect(md).toContain('custom-rule-y');
+  });
+
+  it('adjusts the §F task-DAG hint when unit tests are omitted', () => {
+    const withTests = renderPlanMarkdown(planInput({ includeUnitTests: true }));
+    expect(withTests).toContain('plan → implement → test → verify');
+    const noTests = renderPlanMarkdown(planInput({ includeUnitTests: false }));
+    expect(noTests).toContain('plan → implement → verify');
+    expect(noTests).toContain('skip the "test" task');
   });
 });
