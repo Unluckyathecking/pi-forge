@@ -291,6 +291,25 @@ export interface ForgeConfig {
      * --keep-on-fail. Default false (preserve existing behaviour).
      */
     readonly preserve_worktree_on_failure: boolean;
+    /**
+     * What to do with a worktree whose task failed gates.
+     *   - "purge": destroy worktree and branch (legacy default for backward compat
+     *     when preserve_worktree_on_failure is false)
+     *   - "preserve": auto-commit dirty state, tag at refs/forge/failed/<g>/<t>,
+     *     rename worktree to <path><suffix>, write sidecar marker. Operator
+     *     can inspect/salvage with `pi-forge inspect` / `pi-forge salvage`.
+     *   - "tag-and-purge": tag the dirty SHA but destroy the worktree
+     *     (lightweight; tag survives for later `git checkout`).
+     * Default "purge" preserves v1.2.x behaviour. Setting
+     * preserve_worktree_on_failure: true is shorthand for "preserve".
+     */
+    readonly failed_task_behavior: 'purge' | 'preserve' | 'tag-and-purge';
+    /**
+     * Suffix appended when renaming a failed worktree (only used when
+     * failed_task_behavior === "preserve"). Default ".failed". Collisions
+     * are handled by the git adapter (appending `-<unix-ts>`).
+     */
+    readonly failed_worktree_suffix: string;
     readonly archive_after_days: number;
     readonly commit: {
       readonly require_conventional_commits: boolean;

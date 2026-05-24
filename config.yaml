@@ -90,6 +90,20 @@ git:
   # (skips destroyWorktree) so operators can inspect/recover. Default
   # false. Overridable per-run from the CLI via --keep-on-fail.
   preserve_worktree_on_failure: false
+  # What to do with a worktree whose task failed gates.
+  #   "purge"          → destroy worktree + branch (v1.2.x default)
+  #   "preserve"       → auto-commit dirty, tag at refs/forge/failed/<g>/<t>,
+  #                       rename worktree to <path><suffix>, write sidecar
+  #                       marker. Inspect with `pi-forge inspect <task-id>`,
+  #                       salvage with `pi-forge salvage`, purge with
+  #                       `pi-forge cleanup --failed`.
+  #   "tag-and-purge"  → tag the dirty SHA but destroy the worktree
+  #                       (lightweight; tag survives for later checkout).
+  # Setting preserve_worktree_on_failure: true above is shorthand for
+  # failed_task_behavior: "preserve".
+  failed_task_behavior: "purge"
+  # Suffix for renamed failed worktrees. Collisions get a unix-timestamp suffix.
+  failed_worktree_suffix: ".failed"
   archive_after_days: 7
   
   # Commit policy
