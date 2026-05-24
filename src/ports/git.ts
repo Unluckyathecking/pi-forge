@@ -63,6 +63,34 @@ export interface GitPort {
   /** Report whether the working tree at `path` has uncommitted changes vs HEAD. */
   isDirty(path: string): Promise<boolean>;
 
+  /**
+   * Move a worktree from one path to another (wraps `git worktree move`).
+   * If the target path already exists, the implementation appends a
+   * unix-timestamp suffix to avoid clobbering a previous preserved worktree.
+   * Returns the actual path the worktree ended up at.
+   */
+  moveWorktree(fromPath: string, toPath: string): Promise<string>;
+
+  /**
+   * Create or update a custom git ref (wraps `git update-ref`).
+   * Used to tag failed-task SHAs at refs/forge/failed/<goal>/<task> so the
+   * commit survives even if the branch is later deleted.
+   */
+  updateRef(refName: string, sha: string): Promise<void>;
+
+  /**
+   * Delete a custom git ref (wraps `git update-ref -d`).
+   * Used by `pi-forge cleanup --failed` to purge tag refs for stale failures.
+   */
+  deleteRef(refName: string): Promise<void>;
+
+  /**
+   * List refs matching a prefix (wraps `git for-each-ref refs/<prefix>`).
+   * Returns ref names with their SHAs. Used by `pi-forge cleanup --failed`
+   * to enumerate all preserved failures.
+   */
+  listRefs(refPrefix: string): Promise<Array<{ ref: string; sha: string }>>;
+
   /** Health check */
   health(): Promise<{ ok: boolean; message?: string }>;
 }
