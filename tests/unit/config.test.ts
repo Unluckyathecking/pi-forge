@@ -75,4 +75,46 @@ describe('loadConfig', () => {
     await writeFile(bad, 'forge: 42\n', 'utf-8');
     await expect(loadConfig(bad)).rejects.toBeInstanceOf(ConfigError);
   });
+
+  it('applies default failed_task_behavior and failed_worktree_suffix when missing', async () => {
+    // The embedded DEFAULT_CONFIG_YAML now ships the keys, but the Zod
+    // .default() must still kick in for legacy project overrides that
+    // strip them out via a deep-merge.
+    await mkdir(join(workdir, 'config'), { recursive: true });
+    const projectPath = join(workdir, 'config', 'project.yaml');
+    // Project config only sets unrelated keys — defaults must apply for
+    // the new keys via the default config's inherited values OR Zod fallback.
+    await writeFile(
+      projectPath,
+      'gates:\n  mechanical:\n    test:\n      coverage_threshold: 80\n',
+      'utf-8'
+    );
+    const config = await loadConfig(projectPath);
+    expect(config.git.failed_task_behavior).toBe('purge');
+    expect(config.git.failed_worktree_suffix).toBe('.failed');
+  });
+
+  it('accepts failed_task_behavior: preserve via project config override', async () => {
+    await mkdir(join(workdir, 'config'), { recursive: true });
+    const projectPath = join(workdir, 'config', 'project.yaml');
+    await writeFile(
+      projectPath,
+      'git:\n  failed_task_behavior: "preserve"\n  failed_worktree_suffix: ".dead"\n',
+      'utf-8'
+    );
+    const config = await loadConfig(projectPath);
+    expect(config.git.failed_task_behavior).toBe('preserve');
+    expect(config.git.failed_worktree_suffix).toBe('.dead');
+  });
+
+  it('rejects invalid failed_task_behavior enum value', async () => {
+    await mkdir(join(workdir, 'config'), { recursive: true });
+    const projectPath = join(workdir, 'config', 'project.yaml');
+    await writeFile(
+      projectPath,
+      'git:\n  failed_task_behavior: "banana"\n',
+      'utf-8'
+    );
+    await expect(loadConfig(projectPath)).rejects.toBeInstanceOf(ConfigError);
+  });
 });
