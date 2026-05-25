@@ -407,7 +407,7 @@ export function applyEnvOverrides(config: Record<string, unknown>): Record<strin
     result = structuredClone(config);
   } catch (err) {
     throw new ConfigError('Failed to deep clone configuration. Ensure it contains only plain data.', {
-      cause: err instanceof Error ? err.message : String(err),
+      cause: err instanceof Error ? err : new Error(String(err)),
     });
   }
   for (const [key, value] of Object.entries(process.env)) {

@@ -120,19 +120,8 @@ describe('loadConfig', () => {
 
   it('rejects uncloneable values in applyEnvOverrides', () => {
     // structuredClone fails on functions
-    const badConfig: any = { myFunc: () => {} };
+    const badConfig: Record<string, unknown> = { myFunc: () => {} };
     expect(() => applyEnvOverrides(badConfig)).toThrow(ConfigError);
-  });
-
-  it('skips undefined process.env values in applyEnvOverrides', () => {
-    const backup = process.env.FORGE_UNDEFINED_TEST;
-    process.env.FORGE_UNDEFINED_TEST = undefined; // Actually string 'undefined' or deleted. Let's delete it.
-    delete process.env.FORGE_UNDEFINED_TEST;
-    // To mock the exact Object.entries(process.env) returning undefined, we might need a spy, but node doesn't usually do that.
-    // In node, process.env is only string or undefined. But if you assign undefined, it gets stringified or deleted in modern node.
-    // If it's string 'undefined', it's parsed.
-    // Let's just restore it.
-    if (backup !== undefined) process.env.FORGE_UNDEFINED_TEST = backup;
   });
 
   it('applies FORGE_* env overrides creating nested structures if they do not exist', async () => {
@@ -141,6 +130,9 @@ describe('loadConfig', () => {
     process.env.FORGE_GATES__MECHANICAL__TEST__COVERAGE_THRESHOLD = 'unparseable';
     // We expect a Config validation error or fallback. Since we set it to 'unparseable', Zod will fail.
     await expect(loadConfig()).rejects.toBeInstanceOf(ConfigError);
+    delete process.env.FORGE_NEWKEY__NESTED__VALUE;
+    delete process.env.FORGE_NEWKEY__OTHER;
+    delete process.env.FORGE_GATES__MECHANICAL__TEST__COVERAGE_THRESHOLD;
   });
 
   it('getConfig throws if called before loadConfig', async () => {
