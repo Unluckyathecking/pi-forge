@@ -25,7 +25,7 @@ export function delay(ms: number): Promise<void> {
 }
 
 export function isDefined<T>(value: T | undefined | null): value is T {
-  return value != null;
+  return value !== undefined && value !== null;
 }
 
 /**
