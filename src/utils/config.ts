@@ -401,8 +401,15 @@ function deepMerge(
   return result;
 }
 
-function applyEnvOverrides(config: Record<string, unknown>): Record<string, unknown> {
-  const result: Record<string, unknown> = JSON.parse(JSON.stringify(config)) as Record<string, unknown>;
+export function applyEnvOverrides(config: Record<string, unknown>): Record<string, unknown> {
+  let result: Record<string, unknown>;
+  try {
+    result = structuredClone(config);
+  } catch (err) {
+    throw new ConfigError('Failed to deep clone configuration. Ensure it contains only plain data.', {
+      cause: err instanceof Error ? err : new Error(String(err)),
+    });
+  }
   for (const [key, value] of Object.entries(process.env)) {
     if (value === undefined) continue;
     if (!key.startsWith('FORGE_')) continue;

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from
 import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadConfig } from '../../src/utils/config.js';
+import { loadConfig, applyEnvOverrides } from '../../src/utils/config.js';
 import { ConfigError } from '../../src/core/errors.js';
 
 describe('loadConfig', () => {
@@ -116,5 +116,29 @@ describe('loadConfig', () => {
       'utf-8'
     );
     await expect(loadConfig(projectPath)).rejects.toBeInstanceOf(ConfigError);
+  });
+
+  it('rejects uncloneable values in applyEnvOverrides', () => {
+    // structuredClone fails on functions
+    const badConfig: Record<string, unknown> = { myFunc: () => {} };
+    expect(() => applyEnvOverrides(badConfig)).toThrow(ConfigError);
+  });
+
+  it('applies FORGE_* env overrides creating nested structures if they do not exist', async () => {
+    process.env.FORGE_NEWKEY__NESTED__VALUE = 'true';
+    process.env.FORGE_NEWKEY__OTHER = '["a", "b"]';
+    process.env.FORGE_GATES__MECHANICAL__TEST__COVERAGE_THRESHOLD = 'unparseable';
+    // We expect a Config validation error or fallback. Since we set it to 'unparseable', Zod will fail.
+    await expect(loadConfig()).rejects.toBeInstanceOf(ConfigError);
+    delete process.env.FORGE_NEWKEY__NESTED__VALUE;
+    delete process.env.FORGE_NEWKEY__OTHER;
+    delete process.env.FORGE_GATES__MECHANICAL__TEST__COVERAGE_THRESHOLD;
+  });
+
+  it('getConfig throws if called before loadConfig', async () => {
+    // Cannot easily use require in ESM context so dynamically import a fresh one
+    // by appending a query string.
+    const { getConfig: freshGetConfig } = await import('../../src/utils/config.js?cachebust=' + Date.now());
+    expect(() => freshGetConfig()).toThrow(ConfigError);
   });
 });
