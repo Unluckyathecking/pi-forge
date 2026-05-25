@@ -147,7 +147,7 @@ export class ForgeOrchestrator {
               taskId: task.id,
               title: task.title,
               level: task.level,
-              reason: lastFailure ? lastFailure.description : 'unknown',
+              reason: lastFailure?.description ?? 'unknown',
             });
             break;
           }

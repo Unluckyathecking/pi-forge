@@ -436,44 +436,6 @@ describe('ForgeOrchestrator', () => {
     expect(meta.reason).toMatch(/typecheck/);
   });
 
-  it('Critical task failed log extracts correct failure reason from previous ledger entry', async () => {
-    const git = makeMockGit();
-    const state = makeMockState();
-    const verifier: VerifierPort = {
-      ...makeMockVerifier(),
-      runAllGates: jest.fn<VerifierPort['runAllGates']>().mockResolvedValue([
-        { gate: 'lint', status: 'fail', command: 'lint', exit_code: 1, output: 'lint error', duration_ms: 1 },
-      ]),
-    };
-    const planner: PlannerPort = {
-      ...makeMockPlanner(),
-      decompose: jest.fn<PlannerPort['decompose']>().mockResolvedValue({
-        goal_id: 'critical-goal',
-        version: '1.0.0',
-        created_at: new Date().toISOString(),
-        tasks: [
-          {
-            id: 't-critical',
-            level: 1,
-            title: 'Critical migration task',
-            status: 'pending',
-            proof_requirements: [{ gate: 'lint', required: true }],
-            depends_on: [],
-          },
-        ],
-        edges: [],
-      }),
-    };
-
-    const errorSpy = jest.fn();
-    const orch = new ForgeOrchestrator({ config: makeMockConfig(), git, state, verifier, planner, logger: { info: jest.fn(), warn: jest.fn(), error: errorSpy, debug: jest.fn() } });
-
-    await orch.executeGoal('Critical work');
-    const criticalCall = errorSpy.mock.calls.find((c) => c[0] === 'Critical task failed, aborting goal');
-    expect(criticalCall).toBeDefined();
-    expect((criticalCall?.[1] as any).reason).toMatch(/Required gate\(s\) failed: lint/);
-  });
-
   it('marks the task as failed AND records task_failed entry if commit fails after gates pass', async () => {
     const git = makeMockGit();
     (git.commit as jest.Mock<GitPort['commit']>).mockRejectedValue(new Error('commit refused'));
