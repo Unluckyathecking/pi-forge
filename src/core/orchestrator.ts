@@ -131,9 +131,7 @@ export class ForgeOrchestrator {
           failedTasks.add(task.id);
           // Stop if this task is critical (no downstream should run)
           if (task.level <= 1) {
-            const lastFailure = [...ledger.entries].reverse().find(
-              (e) => e.type === 'task_failed' && e.task_id === task.id
-            );
+            const lastFailure = this.findLastFailure(ledger, task.id);
             this.logger.error('Critical task failed, aborting goal', {
               taskId: task.id,
               title: task.title,
@@ -747,6 +745,20 @@ export class ForgeOrchestrator {
   // ──────────────────────────────────────────────────────────────────────────
   // Helpers
   // ──────────────────────────────────────────────────────────────────────────
+
+  // ⚡ Bolt Optimization:
+  // Replaced O(N) array copy and reverse with an O(N) backward iteration.
+  // [...array].reverse().find() creates a new array every time, increasing GC pressure.
+  // Iterating backwards finds the element with O(1) space complexity.
+  private findLastFailure(ledger: EvidenceLedger, taskId: string): EvidenceEntry | undefined {
+    for (let i = ledger.entries.length - 1; i >= 0; i--) {
+      const e = ledger.entries[i];
+      if (e.type === 'task_failed' && e.task_id === taskId) {
+        return e;
+      }
+    }
+    return undefined;
+  }
 
   private getReadyTasks(
     graph: TaskGraph,
