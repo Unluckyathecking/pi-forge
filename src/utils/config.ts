@@ -402,7 +402,7 @@ function deepMerge(
 }
 
 function applyEnvOverrides(config: Record<string, unknown>): Record<string, unknown> {
-  const result: Record<string, unknown> = JSON.parse(JSON.stringify(config)) as Record<string, unknown>;
+  const result: Record<string, unknown> = structuredClone(config);
   for (const [key, value] of Object.entries(process.env)) {
     if (value === undefined) continue;
     if (!key.startsWith('FORGE_')) continue;
