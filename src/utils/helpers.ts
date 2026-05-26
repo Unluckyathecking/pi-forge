@@ -36,7 +36,8 @@ export async function pMap<T, R>(
   mapper: (item: T, index: number) => Promise<R> | R,
   options: { concurrency: number }
 ): Promise<R[]> {
-  const iterator = iterable[Symbol.iterator]();
+  const iterator = iterable[Symbol.iterator]() as Iterator<T, unknown, undefined>;
+
   const results: R[] = [];
 
   if (options.concurrency <= 0) {
@@ -64,6 +65,13 @@ export async function pMap<T, R>(
         next = iterator.next();
       } catch (e) {
         hasError = true;
+        if (iterator.return) {
+           try {
+             iterator.return();
+           } catch {
+             // ignore
+           }
+        }
         return reject(e);
       }
 
@@ -77,8 +85,7 @@ export async function pMap<T, R>(
       const item = next.value;
       startedCount++;
 
-      Promise.resolve()
-        .then(() => mapper(item, currentIndex))
+      new Promise<R>((res) => res(mapper(item, currentIndex)))
         .then(
           (result) => {
             if (hasError) return;
@@ -90,6 +97,13 @@ export async function pMap<T, R>(
           (e) => {
             if (hasError) return;
             hasError = true;
+            if (iterator.return) {
+               try {
+                 iterator.return();
+               } catch {
+                 // ignore
+               }
+            }
             reject(e);
           }
         );
