@@ -1,5 +1,5 @@
 import { describe, it, expect } from '@jest/globals';
-import { slugify, generateId, isDefined } from '../../src/utils/helpers.js';
+import { slugify, generateId, isDefined, pMap, delay } from '../../src/utils/helpers.js';
 
 describe('helpers', () => {
   describe('slugify', () => {
@@ -42,5 +42,55 @@ describe('helpers', () => {
       expect(isDefined(null)).toBe(false);
       expect(isDefined(undefined)).toBe(false);
     });
+  });
+});
+
+describe('pMap', () => {
+  it('maps correctly with concurrency limit', async () => {
+    const arr = [1, 2, 3, 4, 5];
+    const inflight = new Set();
+    let maxInflight = 0;
+
+    const mapped = await pMap(arr, async (val) => {
+      inflight.add(val);
+      maxInflight = Math.max(maxInflight, inflight.size);
+      await delay(10);
+      inflight.delete(val);
+      return val * 2;
+    }, { concurrency: 2 });
+
+    expect(mapped).toEqual([2, 4, 6, 8, 10]);
+    expect(maxInflight).toBeLessThanOrEqual(2);
+  });
+
+  it('handles empty arrays', async () => {
+    const mapped = await pMap([], async (val) => val, { concurrency: 2 });
+    expect(mapped).toEqual([]);
+  });
+
+  it('handles errors', async () => {
+    const p = pMap([1, 2, 3], async (val) => {
+      if (val === 2) throw new Error('fail');
+      return val;
+    }, { concurrency: 2 });
+    await expect(p).rejects.toThrow('fail');
+  });
+
+  it('handles synchronous throw in iterator', async () => {
+    const iterable = {
+      [Symbol.iterator]() {
+        let i = 0;
+        return {
+          next() {
+            if (i === 1) throw new Error('iterator fail');
+            i++;
+            return { value: i, done: false };
+          }
+        };
+      }
+    };
+
+    const p = pMap(iterable, async (val) => val, { concurrency: 1 });
+    await expect(p).rejects.toThrow('iterator fail');
   });
 });
