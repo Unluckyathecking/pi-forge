@@ -23,6 +23,7 @@ import { SimplePlannerAdapter } from '../adapters/planner.js';
 import { PiSdkWorkerAdapter } from '../adapters/worker.js';
 import { loadConfig } from '../utils/config.js';
 import { createLogger } from '../utils/logger.js';
+import { pMap } from '../utils/helpers.js';
 import { ForgeError } from '../core/errors.js';
 import { detectProjectType, renderPlanMarkdown } from './plan-template.js';
 import type { PlanTemplateInput, ProjectType } from './plan-template.js';
@@ -1162,13 +1163,15 @@ export async function renderAggregateStats(
 
   // Load all ledgers + task graphs (skip ones we can't load).
   const data: AggregateStatsDatum[] = (
-    await Promise.all(
-      goalIds.map(async (gid) => {
+    await pMap(
+      goalIds,
+      async (gid) => {
         const ledger = await state.loadEvidenceLedger(gid);
         const graph = await state.loadTaskGraph(gid);
         if (ledger && graph) return { goalId: gid, ledger, graph };
         return null;
-      })
+      },
+      { concurrency: 50 }
     )
   ).filter((d): d is AggregateStatsDatum => d !== null);
 
@@ -1231,21 +1234,24 @@ export async function renderAggregateStats(
 
   // Most-common failed gates from failure proofs.
   const failedGateCounts = new Map<string, number>();
-  await Promise.all(
-    data.map(async ({ goalId }) => {
+  await pMap(
+    data,
+    async ({ goalId }) => {
       const proofIds = await state.listProofArtifacts(goalId);
-      await Promise.all(
-        proofIds.map(async (pid) => {
+      await pMap(
+        proofIds,
+        async (pid) => {
           const proof = await state.loadProofArtifact(goalId, pid);
           if (proof?.all_pass === false && proof.failed_gates) {
             for (const g of proof.failed_gates) {
-              // we can update Map concurrently in JS since execution is single-threaded
               failedGateCounts.set(g, (failedGateCounts.get(g) ?? 0) + 1);
             }
           }
-        })
+        },
+        { concurrency: 20 }
       );
-    })
+    },
+    { concurrency: 50 }
   );
 
   // Recent goals.
