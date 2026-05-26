@@ -33,16 +33,29 @@ export function isDefined<T>(value: T | undefined | null): value is T {
  */
 export async function pMap<T, R>(
   iterable: Iterable<T>,
-  mapper: (item: T, index: number) => Promise<R>,
+  mapper: (item: T, index: number) => Promise<R> | R,
   options: { concurrency: number }
 ): Promise<R[]> {
   const iterator = iterable[Symbol.iterator]();
   const results: R[] = [];
-  const promises = new Set<Promise<void>>();
-  let index = 0;
-  let hasError = false;
+
+  if (options.concurrency <= 0) {
+    return [];
+  }
 
   return new Promise<R[]>((resolve, reject) => {
+    let index = 0;
+    let startedCount = 0;
+    let settledCount = 0;
+    let hasError = false;
+    let isDone = false;
+
+    function checkDone(): void {
+      if (!hasError && isDone && startedCount === settledCount) {
+        resolve(results);
+      }
+    }
+
     function startNext(): void {
       if (hasError) return;
 
@@ -51,40 +64,48 @@ export async function pMap<T, R>(
         next = iterator.next();
       } catch (e) {
         hasError = true;
-
         return reject(e);
       }
 
       if (next.done) {
-        if (promises.size === 0) {
-          resolve(results);
-        }
+        isDone = true;
+        checkDone();
         return;
       }
 
       const currentIndex = index++;
       const item = next.value;
+      startedCount++;
 
-      const p = Promise.resolve().then(() => mapper(item, currentIndex))
-        .then((result) => {
-          results[currentIndex] = result;
-          promises.delete(p);
-          startNext();
-        })
-        .catch((e) => {
-          hasError = true;
-
-          reject(e);
-        });
-
-      promises.add(p);
+      Promise.resolve()
+        .then(() => mapper(item, currentIndex))
+        .then(
+          (result) => {
+            if (hasError) return;
+            results[currentIndex] = result;
+            settledCount++;
+            startNext();
+            checkDone();
+          },
+          (e) => {
+            if (hasError) return;
+            hasError = true;
+            reject(e);
+          }
+        );
     }
 
-    const initialCount = Math.min(options.concurrency, Array.isArray(iterable) ? iterable.length : options.concurrency);
+    // Determine initial count
+    let initialCount = options.concurrency;
+    if (Array.isArray(iterable)) {
+      initialCount = Math.min(options.concurrency, iterable.length);
+    }
+
     if (initialCount === 0) {
-       resolve(results);
-       return;
+      resolve([]);
+      return;
     }
+
     for (let i = 0; i < initialCount; i++) {
       startNext();
     }

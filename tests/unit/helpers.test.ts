@@ -68,12 +68,37 @@ describe('pMap', () => {
     expect(mapped).toEqual([]);
   });
 
-  it('handles errors', async () => {
-    const p = pMap([1, 2, 3], async (val) => {
+  it('handles concurrency 0', async () => {
+    const mapped = await pMap([1, 2], async (val) => val, { concurrency: 0 });
+    expect(mapped).toEqual([]);
+  });
+
+  it('preserves order even with sparse resolution times', async () => {
+    const arr = [1, 2, 3];
+    const mapped = await pMap(arr, async (val) => {
+      if (val === 1) await delay(30);
+      if (val === 2) await delay(10);
+      if (val === 3) await delay(20);
+      return val * 2;
+    }, { concurrency: 3 });
+    expect(mapped).toEqual([2, 4, 6]);
+  });
+
+  it('handles synchronous mappers', async () => {
+    const mapped = await pMap([1, 2, 3], (val) => val * 2, { concurrency: 2 });
+    expect(mapped).toEqual([2, 4, 6]);
+  });
+
+  it('stops processing on error and rejects correctly', async () => {
+    let processed = 0;
+    const p = pMap([1, 2, 3, 4], async (val) => {
+      processed++;
       if (val === 2) throw new Error('fail');
+      await delay(10);
       return val;
-    }, { concurrency: 2 });
+    }, { concurrency: 1 });
     await expect(p).rejects.toThrow('fail');
+    expect(processed).toBe(2);
   });
 
   it('handles synchronous throw in iterator', async () => {
@@ -92,5 +117,13 @@ describe('pMap', () => {
 
     const p = pMap(iterable, async (val) => val, { concurrency: 1 });
     await expect(p).rejects.toThrow('iterator fail');
+  });
+
+  it('passes index to mapper', async () => {
+    const indices: number[] = [];
+    await pMap(['a', 'b', 'c'], async (val, idx) => {
+      indices.push(idx);
+    }, { concurrency: 2 });
+    expect(indices).toEqual([0, 1, 2]);
   });
 });
