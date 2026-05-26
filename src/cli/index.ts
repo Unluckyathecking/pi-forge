@@ -1171,7 +1171,7 @@ export async function renderAggregateStats(
         if (ledger && graph) return { goalId: gid, ledger, graph };
         return null;
       },
-      { concurrency: 50 }
+      { concurrency: 20 }
     )
   ).filter((d): d is AggregateStatsDatum => d !== null);
 
@@ -1234,9 +1234,10 @@ export async function renderAggregateStats(
 
   // Most-common failed gates from failure proofs.
   const failedGateCounts = new Map<string, number>();
-  await pMap(
+  const goalGateCounts = await pMap(
     data,
     async ({ goalId }) => {
+      const counts = new Map<string, number>();
       const proofIds = await state.listProofArtifacts(goalId);
       await pMap(
         proofIds,
@@ -1244,15 +1245,22 @@ export async function renderAggregateStats(
           const proof = await state.loadProofArtifact(goalId, pid);
           if (proof?.all_pass === false && proof.failed_gates) {
             for (const g of proof.failed_gates) {
-              failedGateCounts.set(g, (failedGateCounts.get(g) ?? 0) + 1);
+              counts.set(g, (counts.get(g) ?? 0) + 1);
             }
           }
         },
-        { concurrency: 20 }
+        { concurrency: 10 }
       );
+      return counts;
     },
-    { concurrency: 50 }
+    { concurrency: 20 }
   );
+
+  for (const counts of goalGateCounts) {
+    for (const [g, count] of counts.entries()) {
+      failedGateCounts.set(g, (failedGateCounts.get(g) ?? 0) + count);
+    }
+  }
 
   // Recent goals.
   const recent = [...data]
