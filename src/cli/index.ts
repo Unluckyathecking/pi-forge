@@ -1161,12 +1161,16 @@ export async function renderAggregateStats(
   }
 
   // Load all ledgers + task graphs (skip ones we can't load).
-  const data: AggregateStatsDatum[] = [];
-  for (const gid of goalIds) {
-    const ledger = await state.loadEvidenceLedger(gid);
-    const graph = await state.loadTaskGraph(gid);
-    if (ledger && graph) data.push({ goalId: gid, ledger, graph });
-  }
+  const data: AggregateStatsDatum[] = (
+    await Promise.all(
+      goalIds.map(async (gid) => {
+        const ledger = await state.loadEvidenceLedger(gid);
+        const graph = await state.loadTaskGraph(gid);
+        if (ledger && graph) return { goalId: gid, ledger, graph };
+        return null;
+      })
+    )
+  ).filter((d): d is AggregateStatsDatum => d !== null);
 
   // Aggregate goal-level outcomes.
   const goalStatus = { success: 0, partial: 0, failure: 0, unfinished: 0 };
@@ -1227,17 +1231,22 @@ export async function renderAggregateStats(
 
   // Most-common failed gates from failure proofs.
   const failedGateCounts = new Map<string, number>();
-  for (const { goalId } of data) {
-    const proofIds = await state.listProofArtifacts(goalId);
-    for (const pid of proofIds) {
-      const proof = await state.loadProofArtifact(goalId, pid);
-      if (proof?.all_pass === false && proof.failed_gates) {
-        for (const g of proof.failed_gates) {
-          failedGateCounts.set(g, (failedGateCounts.get(g) ?? 0) + 1);
-        }
-      }
-    }
-  }
+  await Promise.all(
+    data.map(async ({ goalId }) => {
+      const proofIds = await state.listProofArtifacts(goalId);
+      await Promise.all(
+        proofIds.map(async (pid) => {
+          const proof = await state.loadProofArtifact(goalId, pid);
+          if (proof?.all_pass === false && proof.failed_gates) {
+            for (const g of proof.failed_gates) {
+              // we can update Map concurrently in JS since execution is single-threaded
+              failedGateCounts.set(g, (failedGateCounts.get(g) ?? 0) + 1);
+            }
+          }
+        })
+      );
+    })
+  );
 
   // Recent goals.
   const recent = [...data]
