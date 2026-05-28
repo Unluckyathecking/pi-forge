@@ -1,3 +1,3 @@
-## 2024-05-24 - Pre-computing dependency maps in Orchestrator graph
-**Learning:** Calling `graph.edges.filter` inside a task loop causes an O(V * E) iteration when traversing task dependencies, which could block performance significantly for larger graphs.
-**Action:** When filtering or looking up dependencies in graph edges, always prefer pre-computing them into an O(E) map to bring down lookup complexity to O(V + E).
+## 2024-06-25 - Async I/O Loop Optimization in CLI Commands
+**Learning:** In commands like `pi-forge status` that fetch state and artifacts from thousands of directories using the FileSystemAdapter, sequential `for...of` loops reading these files block the event loop linearly, causing significant slowdowns (~1.5s vs ~0.7s locally for 2500 goals). Furthermore, simply using `Promise.all` can cause EMFILE limits to be exceeded for a large number of goals.
+**Action:** Always replace sequential `for...of` loop I/O with a bounded concurrency pool or map like `pMap` with explicitly bounded concurrency (e.g. 20-50 max) to load files concurrently. Note that while single-threaded, `Map` updates (e.g., `map.set(k, map.get(k) + 1)`) are NOT atomic and can race in a concurrent asynchronous loop, so accumulate per-worker or use synchronization.

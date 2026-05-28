@@ -23,6 +23,7 @@ import { SimplePlannerAdapter } from '../adapters/planner.js';
 import { PiSdkWorkerAdapter } from '../adapters/worker.js';
 import { loadConfig } from '../utils/config.js';
 import { createLogger } from '../utils/logger.js';
+import { pMap } from '../utils/helpers.js';
 import { ForgeError } from '../core/errors.js';
 import { detectProjectType, renderPlanMarkdown } from './plan-template.js';
 import type { PlanTemplateInput, ProjectType } from './plan-template.js';
@@ -1161,12 +1162,18 @@ export async function renderAggregateStats(
   }
 
   // Load all ledgers + task graphs (skip ones we can't load).
-  const data: AggregateStatsDatum[] = [];
-  for (const gid of goalIds) {
-    const ledger = await state.loadEvidenceLedger(gid);
-    const graph = await state.loadTaskGraph(gid);
-    if (ledger && graph) data.push({ goalId: gid, ledger, graph });
-  }
+  const data: AggregateStatsDatum[] = (
+    await pMap(
+      goalIds,
+      async (gid) => {
+        const ledger = await state.loadEvidenceLedger(gid);
+        const graph = await state.loadTaskGraph(gid);
+        if (ledger && graph) return { goalId: gid, ledger, graph };
+        return null;
+      },
+      { concurrency: 20 }
+    )
+  ).filter((d): d is AggregateStatsDatum => d !== null);
 
   // Aggregate goal-level outcomes.
   const goalStatus = { success: 0, partial: 0, failure: 0, unfinished: 0 };
@@ -1227,15 +1234,31 @@ export async function renderAggregateStats(
 
   // Most-common failed gates from failure proofs.
   const failedGateCounts = new Map<string, number>();
-  for (const { goalId } of data) {
-    const proofIds = await state.listProofArtifacts(goalId);
-    for (const pid of proofIds) {
-      const proof = await state.loadProofArtifact(goalId, pid);
-      if (proof?.all_pass === false && proof.failed_gates) {
-        for (const g of proof.failed_gates) {
-          failedGateCounts.set(g, (failedGateCounts.get(g) ?? 0) + 1);
-        }
-      }
+  const goalGateCounts = await pMap(
+    data,
+    async ({ goalId }) => {
+      const counts = new Map<string, number>();
+      const proofIds = await state.listProofArtifacts(goalId);
+      await pMap(
+        proofIds,
+        async (pid) => {
+          const proof = await state.loadProofArtifact(goalId, pid);
+          if (proof?.all_pass === false && proof.failed_gates) {
+            for (const g of proof.failed_gates) {
+              counts.set(g, (counts.get(g) ?? 0) + 1);
+            }
+          }
+        },
+        { concurrency: 10 }
+      );
+      return counts;
+    },
+    { concurrency: 20 }
+  );
+
+  for (const counts of goalGateCounts) {
+    for (const [g, count] of counts.entries()) {
+      failedGateCounts.set(g, (failedGateCounts.get(g) ?? 0) + count);
     }
   }
 
