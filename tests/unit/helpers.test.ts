@@ -1,5 +1,5 @@
 import { describe, it, expect } from '@jest/globals';
-import { slugify, generateId, isDefined } from '../../src/utils/helpers.js';
+import { slugify, generateId, isDefined, findLast } from '../../src/utils/helpers.js';
 
 describe('helpers', () => {
   describe('slugify', () => {
@@ -41,6 +41,22 @@ describe('helpers', () => {
     it('returns false for null and undefined', () => {
       expect(isDefined(null)).toBe(false);
       expect(isDefined(undefined)).toBe(false);
+    });
+  });
+
+  describe('findLast', () => {
+    it('finds the last matching element in an array', () => {
+      const arr = [1, 2, 3, 4, 2];
+      expect(findLast(arr, (n) => n === 2)).toBe(2);
+    });
+
+    it('returns undefined if no element matches', () => {
+      const arr = [1, 2, 3];
+      expect(findLast(arr, (n) => n === 4)).toBeUndefined();
+    });
+
+    it('returns undefined for an empty array', () => {
+      expect(findLast([], (n) => n === 1)).toBeUndefined();
     });
   });
 });

@@ -25,7 +25,7 @@ import type { VerifierPort, GateResult } from '../ports/verifier.js';
 import type { PlannerPort } from '../ports/planner.js';
 import type { WorkerPort } from '../ports/worker.js';
 import type { Logger } from '../utils/logger.js';
-import { generateId, formatDate, slugify } from '../utils/helpers.js';
+import { generateId, formatDate, slugify, findLast } from '../utils/helpers.js';
 
 export interface OrchestratorDeps {
   readonly config: ForgeConfig;
@@ -131,7 +131,8 @@ export class ForgeOrchestrator {
           failedTasks.add(task.id);
           // Stop if this task is critical (no downstream should run)
           if (task.level <= 1) {
-            const lastFailure = [...ledger.entries].reverse().find(
+            const lastFailure = findLast(
+              ledger.entries,
               (e) => e.type === 'task_failed' && e.task_id === task.id
             );
             this.logger.error('Critical task failed, aborting goal', {

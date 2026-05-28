@@ -24,6 +24,7 @@ import { PiSdkWorkerAdapter } from '../adapters/worker.js';
 import { loadConfig } from '../utils/config.js';
 import { createLogger } from '../utils/logger.js';
 import { ForgeError } from '../core/errors.js';
+import { findLast } from '../utils/helpers.js';
 import { detectProjectType, renderPlanMarkdown } from './plan-template.js';
 import type { PlanTemplateInput, ProjectType } from './plan-template.js';
 import type {
@@ -1078,17 +1079,11 @@ export function findActiveTask(ledger: EvidenceLedger): EvidenceEntry | undefine
       finished.add(e.task_id);
     }
   }
-  for (let i = ledger.entries.length - 1; i >= 0; i--) {
-    const e = ledger.entries[i];
-    if (
-      e.type === 'task_started' &&
-      e.task_id !== undefined &&
-      !finished.has(e.task_id)
-    ) {
-      return e;
-    }
-  }
-  return undefined;
+  return findLast(ledger.entries, (e) =>
+    e.type === 'task_started' &&
+    e.task_id !== undefined &&
+    !finished.has(e.task_id)
+  );
 }
 
 export interface WorktreeStats {

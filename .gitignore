@@ -35,3 +35,4 @@ config/default.yaml
 
 # Knowledge graph artifacts (Understand-Anything)
 .understand-anything/
+*.orig

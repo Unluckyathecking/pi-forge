@@ -27,3 +27,17 @@ export function delay(ms: number): Promise<void> {
 export function isDefined<T>(value: T | undefined | null): value is T {
   return value !== undefined && value !== null;
 }
+
+/**
+ * Returns the value of the last element in the array where predicate is true, and undefined
+ * otherwise.
+ * ⚡ Bolt Optimization: Provides an O(1) space alternative to [...arr].reverse().find()
+ */
+export function findLast<T>(arr: readonly T[], predicate: (item: T) => boolean): T | undefined {
+  for (let i = arr.length - 1; i >= 0; i--) {
+    if (predicate(arr[i])) {
+      return arr[i];
+    }
+  }
+  return undefined;
+}
