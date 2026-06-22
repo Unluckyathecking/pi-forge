@@ -36,54 +36,39 @@ export async function pMap<T, R>(
   mapper: (item: T, index: number) => Promise<R> | R,
   options: { concurrency: number }
 ): Promise<R[]> {
-  const iterator = iterable[Symbol.iterator]() as Iterator<T, unknown, undefined>;
-
-  const results: R[] = [];
-
   if (options.concurrency <= 0) {
     return [];
   }
 
+  // Convert to array upfront so we know the length and can pre-allocate results.
+  const items = Array.from(iterable);
+  if (items.length === 0) {
+    return [];
+  }
+
+  const results = new Array<R>(items.length);
+  const initialCount = Math.min(options.concurrency, items.length);
+
   return new Promise<R[]>((resolve, reject) => {
     let index = 0;
-    let startedCount = 0;
     let settledCount = 0;
     let hasError = false;
-    let isDone = false;
 
     function checkDone(): void {
-      if (!hasError && isDone && startedCount === settledCount) {
+      if (!hasError && settledCount === items.length) {
         resolve(results);
       }
     }
 
     function startNext(): void {
       if (hasError) return;
-
-      let next;
-      try {
-        next = iterator.next();
-      } catch (e) {
-        hasError = true;
-        if (iterator.return) {
-           try {
-             iterator.return();
-           } catch {
-             // ignore
-           }
-        }
-        return reject(e);
-      }
-
-      if (next.done) {
-        isDone = true;
+      if (index >= items.length) {
         checkDone();
         return;
       }
 
       const currentIndex = index++;
-      const item = next.value;
-      startedCount++;
+      const item = items[currentIndex];
 
       new Promise<R>((res) => res(mapper(item, currentIndex)))
         .then(
@@ -92,32 +77,13 @@ export async function pMap<T, R>(
             results[currentIndex] = result;
             settledCount++;
             startNext();
-            checkDone();
           },
           (e) => {
             if (hasError) return;
             hasError = true;
-            if (iterator.return) {
-               try {
-                 iterator.return();
-               } catch {
-                 // ignore
-               }
-            }
             reject(e);
           }
         );
-    }
-
-    // Determine initial count
-    let initialCount = options.concurrency;
-    if (Array.isArray(iterable)) {
-      initialCount = Math.min(options.concurrency, iterable.length);
-    }
-
-    if (initialCount === 0) {
-      resolve([]);
-      return;
     }
 
     for (let i = 0; i < initialCount; i++) {

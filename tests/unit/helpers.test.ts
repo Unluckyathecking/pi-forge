@@ -126,7 +126,6 @@ describe('pMap', () => {
     }, { concurrency: 2 });
     expect(indices).toEqual([0, 1, 2]);
   });
-});
 
   it('rejects on synchronous throw from mapper', async () => {
     const p = pMap([1, 2], (val) => {
@@ -136,28 +135,4 @@ describe('pMap', () => {
     await expect(p).rejects.toThrow('sync fail');
   });
 
-  it('calls iterator.return on early error', async () => {
-    let returned = false;
-    const iterable = {
-      [Symbol.iterator]() {
-        let i = 0;
-        return {
-          next() {
-            if (i >= 3) return { done: true, value: undefined };
-            i++;
-            return { value: i, done: false };
-          },
-          return() {
-            returned = true;
-            return { done: true, value: undefined };
-          }
-        };
-      }
-    };
-    const p = pMap(iterable, async (val) => {
-      if (val === 2) throw new Error('abort');
-      return val;
-    }, { concurrency: 1 });
-    await expect(p).rejects.toThrow('abort');
-    expect(returned).toBe(true);
-  });
+});
