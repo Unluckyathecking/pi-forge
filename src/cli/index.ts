@@ -1162,6 +1162,7 @@ export async function renderAggregateStats(
   }
 
   // Load all ledgers + task graphs (skip ones we can't load).
+  const AGGREGATE_STATS_CONCURRENCY = 20;
   const data: AggregateStatsDatum[] = (
     await pMap(
       goalIds,
@@ -1171,7 +1172,7 @@ export async function renderAggregateStats(
         if (ledger && graph) return { goalId: gid, ledger, graph };
         return null;
       },
-      { concurrency: 20 }
+      { concurrency: AGGREGATE_STATS_CONCURRENCY }
     )
   ).filter((d): d is AggregateStatsDatum => d !== null);
 
@@ -1234,26 +1235,24 @@ export async function renderAggregateStats(
 
   // Most-common failed gates from failure proofs.
   const failedGateCounts = new Map<string, number>();
+
   const goalGateCounts = await pMap(
     data,
     async ({ goalId }) => {
       const counts = new Map<string, number>();
       const proofIds = await state.listProofArtifacts(goalId);
-      await pMap(
-        proofIds,
-        async (pid) => {
-          const proof = await state.loadProofArtifact(goalId, pid);
-          if (proof?.all_pass === false && proof.failed_gates) {
-            for (const g of proof.failed_gates) {
-              counts.set(g, (counts.get(g) ?? 0) + 1);
-            }
+      // Sequential proof loading to avoid multiplying concurrency with outer pMap
+      for (const pid of proofIds) {
+        const proof = await state.loadProofArtifact(goalId, pid);
+        if (proof?.all_pass === false && proof.failed_gates) {
+          for (const g of proof.failed_gates) {
+            counts.set(g, (counts.get(g) ?? 0) + 1);
           }
-        },
-        { concurrency: 10 }
-      );
+        }
+      }
       return counts;
     },
-    { concurrency: 20 }
+    { concurrency: AGGREGATE_STATS_CONCURRENCY }
   );
 
   for (const counts of goalGateCounts) {
