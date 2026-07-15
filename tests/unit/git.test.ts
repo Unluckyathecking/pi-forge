@@ -6,6 +6,10 @@ import { execSync } from 'node:child_process';
 import { GitCliAdapter } from '../../src/adapters/git.js';
 import { GitError } from '../../src/core/errors.js';
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 describe('GitCliAdapter — Phase 2 ref + worktree helpers', () => {
   let repoRoot: string;
   let adapter: GitCliAdapter;
@@ -42,7 +46,7 @@ describe('GitCliAdapter — Phase 2 ref + worktree helpers', () => {
     await adapter.moveWorktree(wt1, target);
     const moved2 = await adapter.moveWorktree(wt2, target);
     expect(moved2).not.toBe(target);
-    expect(moved2).toMatch(new RegExp(`^${target}-\\d+$`));
+    expect(moved2).toMatch(new RegExp(`^${escapeRegExp(target)}-\\d+$`));
   });
 
   it('updateRef + listRefs + deleteRef roundtrip', async () => {

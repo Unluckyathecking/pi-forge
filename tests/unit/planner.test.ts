@@ -70,6 +70,18 @@ describe('SimplePlannerAdapter', () => {
     expect(refined.edges.some((e) => e.to === last.id)).toBe(true);
   });
 
+  it('refineGraph can recover an empty task graph', async () => {
+    const refined = await planner.refineGraph({
+      goal_id: 'empty',
+      version: '1.0.0',
+      created_at: new Date().toISOString(),
+      tasks: [],
+      edges: [],
+    }, 'Add the first task');
+    expect(refined.tasks).toHaveLength(1);
+    expect(refined.edges).toEqual([]);
+  });
+
   it('falls back to a single task when maxDepth is 0', async () => {
     const graph = await planner.decompose({ goal: 'Document the API', constraints: { max_depth: 0 } });
     expect(graph.tasks).toHaveLength(1);
@@ -83,6 +95,17 @@ describe('SimplePlannerAdapter', () => {
     const gates = reqs.map((r) => r.gate);
     expect(gates).toContain('build');
     expect(gates).toContain('security_scan');
+  });
+
+  it('keeps line-level task requirements lightweight', async () => {
+    const reqs = await planner.generateProofRequirements({
+      id: 't', level: 3, title: 'line edit', status: 'pending',
+      proof_requirements: [], input_contracts: [], output_contracts: [], estimated_minutes: 15,
+    } as Task);
+    const gates = reqs.map((r) => r.gate);
+    expect(gates).not.toContain('build');
+    expect(gates).not.toContain('security_scan');
+    expect(gates).not.toContain('contract_verify');
   });
 
   describe('PLAN.md detection', () => {

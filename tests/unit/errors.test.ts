@@ -42,4 +42,9 @@ describe('errors', () => {
     const err = new OrchestratorError('fail', 'CUSTOM_CODE');
     expect(err.code).toBe('CUSTOM_CODE');
   });
+
+  it('OrchestratorError provides its default code', () => {
+    const err = new OrchestratorError('fail');
+    expect(err.code).toBe('ORCHESTRATOR_ERROR');
+  });
 });

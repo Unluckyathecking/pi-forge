@@ -6,6 +6,24 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Public package-root API exports and a verified package entry point.
+- Community health documentation, issue forms, pull request template,
+  governance, support, and API stability policies.
+- Dependabot configuration and Linux, macOS, and Windows compatibility checks.
+
+### Changed
+
+- Made clean builds portable across supported operating systems.
+- Made hook and worktree collision tests portable on Windows.
+- Hardened GitHub Actions permissions and pinned third-party actions.
+- Guarded npm publication against the existing, unrelated `pi-forge` package.
+
+### Security
+
+- Updated `js-yaml` to a patched release and added automated dependency review.
+
 ## [1.7.0] — 2026-05-24
 
 Phase 6 — operator UX capstone. PLAN.md quality is the #1 determinant

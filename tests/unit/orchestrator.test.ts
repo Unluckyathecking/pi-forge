@@ -11,6 +11,17 @@ import type { PlannerPort } from '../../src/ports/planner.js';
 import type { WorkerPort } from '../../src/ports/worker.js';
 import type { Logger } from '../../src/utils/logger.js';
 
+async function writeEnvCaptureHook(directory: string, name: string): Promise<string> {
+  const windows = process.platform === 'win32';
+  const hookPath = join(directory, `${name}${windows ? '.cmd' : '.sh'}`);
+  const contents = windows
+    ? '@echo off\r\nset PI_FORGE_ > "%SENTINEL%"\r\n'
+    : '#!/bin/sh\nenv | grep ^PI_FORGE_ > "$SENTINEL"\n';
+  await writeFile(hookPath, contents, 'utf-8');
+  if (!windows) await chmod(hookPath, 0o755);
+  return hookPath;
+}
+
 function makeMockConfig(): ForgeConfig {
   return {
     forge: { version: '1.0.0', name: 'pi-forge', description: 'test' },
@@ -778,14 +789,7 @@ describe('ForgeOrchestrator', () => {
     const tmp = await mkdtemp(join(tmpdir(), 'pi-forge-hook-fail-'));
     try {
       const sentinel = join(tmp, 'env.out');
-      const hookPath = join(tmp, 'on-fail.sh');
-      await writeFile(
-        hookPath,
-        '#!/bin/sh\n' +
-          'env | grep ^PI_FORGE_ > "$SENTINEL"\n',
-        'utf-8',
-      );
-      await chmod(hookPath, 0o755);
+      const hookPath = await writeEnvCaptureHook(tmp, 'on-fail');
       process.env.SENTINEL = sentinel;
 
       const infoSpy = jest.fn();
@@ -884,14 +888,7 @@ describe('ForgeOrchestrator', () => {
     const tmp = await mkdtemp(join(tmpdir(), 'pi-forge-hook-success-'));
     try {
       const sentinel = join(tmp, 'env.out');
-      const hookPath = join(tmp, 'on-success.sh');
-      await writeFile(
-        hookPath,
-        '#!/bin/sh\n' +
-          'env | grep ^PI_FORGE_ > "$SENTINEL"\n',
-        'utf-8',
-      );
-      await chmod(hookPath, 0o755);
+      const hookPath = await writeEnvCaptureHook(tmp, 'on-success');
       process.env.SENTINEL = sentinel;
 
       const infoSpy = jest.fn();

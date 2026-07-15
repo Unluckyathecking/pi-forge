@@ -5,9 +5,7 @@
 [![ci](https://github.com/Unluckyathecking/pi-forge/actions/workflows/ci.yml/badge.svg)](https://github.com/Unluckyathecking/pi-forge/actions/workflows/ci.yml)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.4-blue)](https://www.typescriptlang.org/)
 [![Node](https://img.shields.io/badge/Node-20%2B-green)](https://nodejs.org/)
-[![Tests](https://img.shields.io/badge/tests-50%2F50-brightgreen)]()
-[![Coverage](https://img.shields.io/badge/stmt%20coverage-87%25-brightgreen)]()
-[![Branches](https://img.shields.io/badge/branch%20coverage-71%25-green)]()
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Pi Forge is a production-grade harness for autonomous code generation. It
 treats software development as a deterministic industrial process: every
@@ -34,17 +32,16 @@ extension**:
 | Surface       | Entry point                                | When to use                                                  |
 | ------------- | ------------------------------------------ | ------------------------------------------------------------ |
 | Interactive   | `pi --provider kimi-coder` + `/forge ...`  | Day-to-day development inside a Pi session.                  |
-| Programmatic  | `npx pi-forge forge <goal>`                | Batch runs, CI hooks, automation, replays.                   |
+| Programmatic  | `npm run dev -- forge <goal>`              | Batch runs, CI hooks, automation, replays from a source checkout. |
 
 Both share the same orchestrator, planner, gates, and evidence ledger.
 
 ## Quick start
 
 ```bash
-# Install dependencies
-npm install
-
-# Build
+git clone https://github.com/Unluckyathecking/pi-forge.git
+cd pi-forge
+npm ci
 npm run build:clean
 
 # Plan a goal without touching the codebase
@@ -60,6 +57,15 @@ npm run dev -- forge "Add user authentication" --no-worker
 # Inspect saved state
 npm run dev -- status
 ```
+
+Node.js 20 or newer is required. Pi-backed execution additionally requires
+[`@mariozechner/pi-coding-agent`](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent);
+dry runs and gates-only mode do not.
+
+> **Registry status:** this project is not currently published to npm. The
+> unscoped `pi-forge` name on npm belongs to a different project. Install from
+> this source repository until the maintainers announce a verified package
+> name.
 
 ## Interactive Pi/Kimi workflow
 
@@ -276,9 +282,23 @@ See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full design.
 2. Bump `version` in `package.json` and move the `Unreleased` block to the
    new version heading.
 3. `git tag v<version> && git push --tags`.
-4. The `release.yml` workflow runs `prepublishOnly` (full quality gates
-   plus a clean build), then publishes to npm with provenance.
+4. The `release.yml` workflow runs `prepublishOnly` (full quality gates plus a
+   clean build). npm publication remains guarded until maintainers choose and
+   verify an available registry package name.
+
+## Community
+
+- [Contributing guide](CONTRIBUTING.md)
+- [Support](SUPPORT.md)
+- [Security policy](SECURITY.md)
+- [Governance](GOVERNANCE.md)
+- [API stability and deprecation policy](API_STABILITY.md)
+- [Code of Conduct](CODE_OF_CONDUCT.md)
+
+Good first contributions include documentation corrections, reproducible bug
+reports, focused tests, and new verifier adapters. Please discuss substantial
+features or public API changes in an issue before implementation.
 
 ## License
 
-MIT
+Pi Forge is available under the [MIT License](LICENSE).

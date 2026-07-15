@@ -23,10 +23,10 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22.x'
           registry-url: 'https://registry.npmjs.org'
@@ -47,8 +47,30 @@ jobs:
       - name: Verify dist contents
         run: |
           test -f dist/cli/index.js
-          test -f dist/index.js || true
+          test -f dist/index.js
           test -f dist/core/orchestrator.js
+
+      - name: Verify public package entry point
+        run: node -e "import('pi-forge').then((pkg) => { if (typeof pkg.ForgeOrchestrator !== 'function') process.exit(1) })"
+
+      - name: Inspect package contents
+        run: npm pack --dry-run
+
+      - name: Verify npm package identity
+        run: |
+          PACKAGE_NAME=$(node -p "require('./package.json').name")
+          if REGISTRY_REPOSITORY=$(npm view "$PACKAGE_NAME" repository.url 2>/dev/null); then
+            case "$REGISTRY_REPOSITORY" in
+              *Unluckyathecking/pi-forge*) ;;
+              *)
+                echo "::error::The package name is registered to a different repository: $REGISTRY_REPOSITORY"
+                echo "Choose an available package name before publishing."
+                exit 1
+                ;;
+            esac
+          else
+            echo "Registry package name is currently unregistered."
+          fi
 
       - name: Verify tag matches package.json version
         if: github.event_name == 'push'

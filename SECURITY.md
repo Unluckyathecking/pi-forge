@@ -2,8 +2,22 @@
 
 ## Reporting a vulnerability
 
-Open a private security advisory on GitHub or email the maintainer. Do not
-file public issues for security problems.
+Use GitHub's **Report a vulnerability** flow to open a private security
+advisory at
+[github.com/Unluckyathecking/pi-forge/security/advisories/new](https://github.com/Unluckyathecking/pi-forge/security/advisories/new).
+Do not file public issues for security problems.
+
+Include the affected version, impact, reproduction steps, and any known
+mitigation. Remove credentials and private source code from the report. A
+maintainer will acknowledge a report as capacity allows, coordinate a fix and
+disclosure, and credit reporters who want attribution. This community project
+does not guarantee a response or remediation timeline.
+
+## Supported versions
+
+Security fixes are provided for the latest released minor version. Older
+versions may receive a fix at the maintainers' discretion; users should upgrade
+to the newest release before reporting an issue already fixed there.
 
 ## Authentication boundary
 

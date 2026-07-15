@@ -119,6 +119,11 @@ describe('FilesystemStateAdapter', () => {
       pending_decisions: [],
     };
     await adapter.saveCheckpoint(checkpoint);
+    await adapter.saveCheckpoint({
+      ...checkpoint,
+      checkpoint_id: 'chk-other',
+      goal_id: 'another-goal',
+    });
     const loaded = await adapter.loadCheckpoint('chk-1');
     expect(loaded?.checkpoint_id).toBe('chk-1');
     const list = await adapter.listCheckpoints('g-cp');

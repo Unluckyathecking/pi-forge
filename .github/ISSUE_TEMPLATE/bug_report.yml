@@ -1,0 +1,54 @@
+name: Bug report
+description: Report a reproducible Pi Forge problem
+title: "[Bug]: "
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Thanks for the report. Do not include credentials, private code, or
+        unredacted evidence logs. Report vulnerabilities through SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: Pi Forge version
+      placeholder: "1.7.0"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system, Node.js version, and installation method
+      placeholder: "Ubuntu 24.04, Node 22.15, npm global install"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Provide commands and a minimal public repository or fixture when possible.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include redacted logs or stack traces.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Preflight checklist
+      options:
+        - label: I searched existing issues and tested the latest release.
+          required: true
+        - label: This report does not contain secrets or private source code.
+          required: true
