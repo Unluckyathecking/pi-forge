@@ -1,8 +1,8 @@
-name: Kimi Code Review
+name: Kimi Code Review [DISABLED]
 
 on:
-  pull_request:
-    types: [opened, synchronize, ready_for_review]
+  workflow_dispatch:
+    # Disabled - no longer running on pull_request events
 
 # Cancel any in-progress run when a fresh commit lands on the same PR so we
 # don't burn Kimi tokens on already-superseded SHAs.
