@@ -161,7 +161,7 @@ External Adapters  ──▶  git, shell, Pi SDK, MCP, …
         │
         ▼
 Ports              ──▶  GitPort  StatePort  VerifierPort
-                       PlannerPort  WorkerPort  ModelPort
+                       PlannerPort  WorkerPort
         │
         ▼
 Orchestration Core ──▶  policies · task DAG · state machine
@@ -226,7 +226,7 @@ pi-forge/
 ├── src/
 │   ├── core/            # domain types, errors, the orchestrator
 │   ├── ports/           # GitPort, StatePort, VerifierPort,
-│   │                    # PlannerPort, WorkerPort, ModelPort
+│   │                    # PlannerPort, WorkerPort
 │   ├── adapters/        # git CLI, filesystem state, local command
 │   │                    # verifier, rule-based planner, Pi SDK worker
 │   ├── cli/             # CLI entry point + PLAN.md template
@@ -234,8 +234,8 @@ pi-forge/
 │   └── types/           # ambient stub for the Pi SDK
 ├── extensions/
 │   └── pi-forge.ts      # Pi Coding Agent extension
-├── schemas/             # task graph, proof artifact, evidence
-│                        # ledger, state checkpoint
+├── schemas/             # published JSON Schemas for the task graph,
+│                        # proof artifact, ledger, and checkpoint shapes
 ├── roles/               # agent role specifications
 ├── tests/unit/          # Jest unit tests
 ├── config.yaml          # default harness configuration
@@ -286,11 +286,11 @@ Role specifications live in [`roles/`](roles/).
 
 ## Architecture variants
 
-The proof-carrying pipeline is the spine and the only variant enabled by
-default. Speculative execution, capability-based routing, competitive
-co-evolution, a self-modifying harness, and constraint-satisfaction
-planning are sketched as pluggable modules in `config.yaml` and
-[ARCHITECTURE.md](ARCHITECTURE.md); all of them are currently disabled.
+The proof-carrying pipeline is the spine. Speculative execution,
+capability-based routing, competitive co-evolution, a self-modifying
+harness, and constraint-satisfaction planning are sketched as pluggable
+modules in [ARCHITECTURE.md](ARCHITECTURE.md); none of them are
+implemented today.
 
 ## Release process
 

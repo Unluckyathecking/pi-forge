@@ -121,7 +121,6 @@ The orchestrator core has **zero direct dependencies** on specific tools, models
               │  VerifierPort               │
               │  StatePort                  │
               │  GitPort                    │
-              │  ModelPort                  │
               └─────────────┬───────────────┘
                             │
                             ▼
@@ -179,7 +178,7 @@ Task Decomposer
 
 ### 4.2 Proof Artifact Schema
 
-See [`schemas/proof-artifact.json`](./schemas/proof-artifact.json). Every proof artifact contains:
+The shape is specified in [`schemas/proof-artifact.json`](./schemas/proof-artifact.json). Every proof artifact contains:
 
 - **Claims**: A list of gate results (lint, typecheck, test, build, security_scan, etc.)
 - **Command executed, exit code, output excerpt**
@@ -272,6 +271,10 @@ State is first-class, not hidden in chat transcripts.
 | **Evidence Ledger** | [`schemas/evidence-ledger.json`](./schemas/evidence-ledger.json) | Complete audit log of actions and decisions |
 | **State Checkpoint** | [`schemas/state-checkpoint.json`](./schemas/state-checkpoint.json) | Recovery point for resuming interrupted sessions |
 
+The schemas are the published specification for these shapes and ship in
+the npm package. The adapters construct and parse the files directly;
+nothing loads the schemas for runtime validation.
+
 ### 7.2 State Paths
 
 ```
@@ -343,38 +346,38 @@ behavior.
 
 Pi Forge starts with the Proof-Carrying Pipeline as its spine. Additional architectures attach as modules.
 
-### Variant 1: Proof-Carrying Code (ENABLED — MVP Spine)
+### Variant 1: Proof-Carrying Code (implemented — MVP spine)
 Every task includes proof requirements before implementation. The coding agent produces both code and evidence. A mechanical verifier checks evidence before review.
 
 **Best for:** All tasks. This is the baseline.
 
-### Variant 2: Speculative Execution (DISABLED — v2)
+### Variant 2: Speculative Execution (not implemented — planned v2)
 For ambiguous tasks, launch multiple independent strategies in parallel worktrees. Kill or pause losing branches early when evidence shows they are slower, riskier, or drifting.
 
 **Best for:** UI implementation with several possible designs, bug fixes with uncertain root cause, performance optimization.
 
 **Early-kill signals:** Failing tests with no progress, growing diff without evidence, incompatible architectural direction, tool-call exhaustion.
 
-### Variant 3: Capability-Based Composition (DISABLED — v2)
+### Variant 3: Capability-Based Composition (not implemented — planned v2)
 Instead of fixed role names, route tasks to agents based on declared capabilities (`typescript.refactor`, `react.ui`, `security.review`).
 
 **Best for:** Heterogeneous agent pools, multiple model backends, long-running systems that learn which agent is good at what.
 
-### Variant 4: Competitive Co-Evolution (DISABLED — v2)
+### Variant 4: Competitive Co-Evolution (not implemented — planned v2)
 Use adversarial pairs: builder vs. breaker. One agent builds, another tries to exploit or invalidate.
 
 **Best for:** Security-sensitive code, API boundary hardening, test quality improvement.
 
 **Policy:** Opt-in only. Costs more tokens and time.
 
-### Variant 5: Self-Modifying Harness (DISABLED — production)
+### Variant 5: Self-Modifying Harness (not implemented — planned later)
 The harness learns from completed runs and proposes improvements to its own prompts, policies, routing, and templates.
 
 **Best for:** Long-running projects, repeated task types, reducing recurring failures.
 
 **Safety rule:** The harness may propose changes but must not silently rewrite control policies. Self-modification goes through evidence, review, and rollback just like product code.
 
-### Variant 6: Constraint-Satisfaction (DISABLED — production)
+### Variant 6: Constraint-Satisfaction (not implemented — planned later)
 Represent the requested system as constraints, then search for an implementation plan that satisfies them.
 
 **Best for:** Complex interdependent tasks, large refactors, multi-module changes.
