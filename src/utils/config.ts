@@ -8,7 +8,7 @@
 import { readFile, writeFile, access, mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { dirname, resolve } from 'path';
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 import { z } from 'zod';
 import type { ForgeConfig } from '../core/types.js';
 import { ConfigError } from '../core/errors.js';
@@ -221,7 +221,7 @@ const gateTypeSchema = z.enum([
 // Input is `unknown` (raw YAML) so we can use `.default()` on fields
 // like `git.preserve_worktree_on_failure` to make them optional in
 // legacy configs while keeping the output strictly typed as ForgeConfig.
-const forgeConfigSchema: z.ZodType<ForgeConfig, z.ZodTypeDef, unknown> = z.object({
+const forgeConfigSchema: z.ZodType<ForgeConfig, unknown> = z.object({
   forge: z.object({
     version: z.string(),
     name: z.string(),
