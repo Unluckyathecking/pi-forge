@@ -1,0 +1,30 @@
+name: Bug report
+description: Something in pi-forge misbehaves
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Please redact credentials and private code from logs. Security
+        problems go through private vulnerability reporting, not an issue.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `pi-forge --version`, or the commit you built from
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: "macOS 15, Node 22"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: What happened, and how to reproduce it
+      description: The command you ran, what you expected, what you got. Redacted logs help.
+    validations:
+      required: true
