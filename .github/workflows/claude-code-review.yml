@@ -1,0 +1,63 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, ready_for_review]
+
+jobs:
+  claude-review:
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Code Review
+        id: claude-review
+        uses: anthropics/claude-code-action@af0559ee4f514d1ef21826982bed13f7edc3c35e # v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          use_sticky_comment: true
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            Review this pull request against the repo's own standards before
+            anything generic:
+
+            1. CLAUDE.md is the operating standard — flag violations of its
+               five pillars (simplicity first), speculative abstraction,
+               non-surgical changes, and oversized modules.
+            2. The proof-carrying invariants: no gate bypass or softening in
+               the contract -> proof -> gates -> promote flow; worktree
+               isolation intact (ids validated [A-Za-z0-9_.-], work under
+               .pi/worktrees); spawned processes get the scrubbed env
+               allowlist from src/adapters/git.ts, never a full passthrough;
+               the Kimi coding provider (src/ports/worker.ts, --kimi-key) is
+               product code, not residue.
+            3. Honesty rules: a change claiming config-driven behavior must
+               point at code that reads the key (risk scoring is hardcoded in
+               src/adapters/verifier.ts); coverage floors stay at 80/80/80/70
+               and tests don't get weakened to pass; workflow actions stay
+               SHA-pinned; nothing reintroduces npm publish under this
+               package name (the registry name belongs to an unrelated
+               project).
+            4. Then the usual: correctness, security, performance.
+
+            Be selective — a few findings that matter beat exhaustive nitpicks.
+            The PR branch is checked out in the working directory.
+
+            Use `gh pr comment` for top-level feedback.
+            Use `mcp__github_inline_comment__create_inline_comment` (with
+            `confirmed: true`) for specific lines.
+            Only post GitHub comments - don't submit review text as messages.
+
+          claude_args: |
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Read,Grep,Glob"
