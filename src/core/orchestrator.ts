@@ -358,13 +358,12 @@ export class ForgeOrchestrator {
       });
 
       // Persist the artifact BEFORE deciding whether to clean up the
-      // worktree. The pre-fix orchestrator built the artifact and then
-      // threw it away — operators were left with an empty proofs/
-      // directory and no record of which gate failed. Save it first
-      // so failure diagnostics survive even if cleanup later throws.
+      // worktree, so failure diagnostics survive even if cleanup throws.
+      // Skipping this leaves operators with an empty proofs/ directory and
+      // no record of which gate failed.
       await this.state.saveProofArtifact(this.currentGoalId, artifact);
 
-      // === Cleanup / preservation decision (Phase 2) ===
+      // === Cleanup / preservation decision ===
       // preserve_worktree_on_failure: true is shorthand for failed_task_behavior: 'preserve'
       const effectiveBehavior: ForgeConfig['git']['failed_task_behavior'] =
         this.config.git.preserve_worktree_on_failure ? 'preserve' : this.config.git.failed_task_behavior;
@@ -382,15 +381,15 @@ export class ForgeOrchestrator {
           : { commitSha: '', preservedPath: undefined };
 
       if (effectiveBehavior !== 'preserve' && effectiveBehavior !== 'tag-and-purge') {
-        // 'purge' — legacy default, unchanged behaviour
+        // 'purge' — the default: drop the worktree and, unless retained, its branch.
         if (this.config.git.auto_clean_worktrees) {
           await this.git.destroyWorktree(worktree.path, !this.config.git.retain_failed_branches);
         }
       }
 
-      // Phase 5: fire the operator-defined failure hook AFTER the lifecycle
-      // event (preservation / purge) has settled. Fires for ALL failures
-      // — operators want the signal regardless of preservation behaviour.
+      // Fire the operator-defined failure hook AFTER the lifecycle event
+      // (preservation / purge) has settled. Fires for ALL failures —
+      // operators want the signal regardless of preservation behaviour.
       await this.runHook('on_task_failed', {
         PI_FORGE_TASK_ID: task.id,
         PI_FORGE_GOAL_ID: this.currentGoalId ?? '',
@@ -404,8 +403,8 @@ export class ForgeOrchestrator {
       });
 
       // Throw instead of returning undefined so executeTask catches it and
-      // writes an enriched task_failed ledger entry. Previously, returning
-      // undefined left the ledger silent on gate failures.
+      // writes an enriched task_failed ledger entry; returning undefined
+      // would leave the ledger silent on gate failures.
       throw new OrchestratorError(failureReason, 'GATES_FAILED', {
         failed_gates: failedGates.map((g) => g.gate),
         first_error_line: firstErrorLine.substring(0, 200),
@@ -465,9 +464,9 @@ export class ForgeOrchestrator {
     task.completed_at = formatDate();
     task.evidence_id = artifact.artifact_id;
 
-    // Phase 5: fire the operator-defined success hook AFTER the artifact
-    // is durably persisted. Awaited so a downstream Slack-notify or
-    // CI-trigger hook completes before the lifecycle log entry lands.
+    // Fire the operator-defined success hook AFTER the artifact is durably
+    // persisted. Awaited so a downstream Slack-notify or CI-trigger hook
+    // completes before the lifecycle log entry lands.
     const durationSeconds = artifact.summary?.duration_seconds ?? 0;
     await this.runHook('on_task_completed', {
       PI_FORGE_TASK_ID: task.id,
@@ -483,7 +482,7 @@ export class ForgeOrchestrator {
   }
 
   // ──────────────────────────────────────────────────────────────────────────
-  // Failure Preservation (Phase 2)
+  // Failure Preservation
   // ──────────────────────────────────────────────────────────────────────────
 
   /**
@@ -655,7 +654,7 @@ export class ForgeOrchestrator {
   }
 
   // ──────────────────────────────────────────────────────────────────────────
-  // Hooks (Phase 5)
+  // Hooks
   // ──────────────────────────────────────────────────────────────────────────
 
   /**
@@ -753,10 +752,9 @@ export class ForgeOrchestrator {
     completed: Set<string>,
     failed: Set<string>
   ): Task[] {
-    // ⚡ Bolt Optimization:
-    // Replaced O(V * E) filter lookup with an O(E) map pre-computation to speed up finding tasks.
-    // This reduces the complexity to O(V + E) for each call, significantly improving execution
-    // time for task graphs with many dependencies.
+    // Index the edges by target task before filtering. Re-scanning graph.edges
+    // inside the filter below would make each call O(V * E); the pre-computed
+    // map keeps it O(V + E), which matters on graphs with many dependencies.
     const dependencyMap = new Map<string, string[]>();
     for (const edge of graph.edges) {
       if (edge.type === 'depends_on') {
