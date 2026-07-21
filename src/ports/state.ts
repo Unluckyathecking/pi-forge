@@ -41,7 +41,7 @@ export interface StatePort {
   loadCheckpoint(checkpointId: string): Promise<StateCheckpoint | undefined>;
   listCheckpoints(goalId: string): Promise<StateCheckpoint[]>;
 
-  // ── Failed-task markers (Phase 2 preservation) ──
+  // ── Failed-task markers ──
   saveFailedMarker(marker: FailedTaskMarker): Promise<void>;
   loadFailedMarker(taskId: string): Promise<FailedTaskMarker | undefined>;
   listFailedMarkers(): Promise<string[]>;  // returns task_ids

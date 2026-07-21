@@ -55,7 +55,6 @@ export class SimplePlannerAdapter implements PlannerPort {
   }
 
   async refineGraph(graph: TaskGraph, feedback: string): Promise<TaskGraph> {
-    // Simple refinement: add a follow-up task for feedback
     const followUpId = `feedback-${graph.tasks.length + 1}`;
     const followUp: Task = {
       id: followUpId,
