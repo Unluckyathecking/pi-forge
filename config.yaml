@@ -1,5 +1,5 @@
-# Pi Forge Harness Configuration v1.0.0
-# Production-grade autonomous coding harness
+# Pi Forge harness configuration.
+# Values here are merged over the built-in defaults, then over FORGE_* env vars.
 
 forge:
   version: "1.0.0"
@@ -47,7 +47,7 @@ core:
     max_escalation_depth: 3
 
 # ──────────────────────────────────────────────────────────────────────────────
-# PROOF-CARRYING PIPELINE (MVP Spine)
+# PROOF-CARRYING PIPELINE
 # ──────────────────────────────────────────────────────────────────────────────
 
 proof_carrying:
@@ -91,7 +91,7 @@ git:
   # false. Overridable per-run from the CLI via --keep-on-fail.
   preserve_worktree_on_failure: false
   # What to do with a worktree whose task failed gates.
-  #   "purge"          → destroy worktree + branch (v1.2.x default)
+  #   "purge"          → destroy worktree + branch (the default)
   #   "preserve"       → auto-commit dirty, tag at refs/forge/failed/<g>/<t>,
   #                       rename worktree to <path><suffix>, write sidecar
   #                       marker. Inspect with `pi-forge inspect <task-id>`,
@@ -209,7 +209,7 @@ agents:
 
   # Capability-based routing overrides role-based when enabled
   capability_routing:
-    enabled: false  # Enable in v2
+    enabled: false
     registry_path: ".pi/capabilities/"
     fallback_role: "coder"
 
@@ -299,7 +299,7 @@ gates:
 # ──────────────────────────────────────────────────────────────────────────────
 
 variants:
-  # Variant 1: Proof-Carrying Code (always enabled - MVP spine)
+  # Variant 1: Proof-carrying code (always enabled)
   proof_carrying:
     enabled: true
     priority: 1
