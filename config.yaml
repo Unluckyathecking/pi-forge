@@ -1,5 +1,5 @@
 # Pi Forge harness configuration.
-# Values here are merged over the built-in defaults, then over FORGE_* env vars.
+# Built-in defaults first, then this file, then FORGE_* env vars; later layers win.
 
 forge:
   version: "1.0.0"
