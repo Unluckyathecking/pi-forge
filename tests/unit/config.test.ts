@@ -77,13 +77,13 @@ describe('loadConfig', () => {
   });
 
   it('applies default failed_task_behavior and failed_worktree_suffix when missing', async () => {
-    // The embedded DEFAULT_CONFIG_YAML now ships the keys, but the Zod
+    // The embedded DEFAULT_CONFIG_YAML ships these keys, but the Zod
     // .default() must still kick in for legacy project overrides that
     // strip them out via a deep-merge.
     await mkdir(join(workdir, 'config'), { recursive: true });
     const projectPath = join(workdir, 'config', 'project.yaml');
-    // Project config only sets unrelated keys — defaults must apply for
-    // the new keys via the default config's inherited values OR Zod fallback.
+    // Project config only sets unrelated keys, so the defaults must come
+    // either from the default config or from the Zod fallback.
     await writeFile(
       projectPath,
       'gates:\n  mechanical:\n    test:\n      coverage_threshold: 80\n',
@@ -128,7 +128,8 @@ describe('loadConfig', () => {
     process.env.FORGE_NEWKEY__NESTED__VALUE = 'true';
     process.env.FORGE_NEWKEY__OTHER = '["a", "b"]';
     process.env.FORGE_GATES__MECHANICAL__TEST__COVERAGE_THRESHOLD = 'unparseable';
-    // We expect a Config validation error or fallback. Since we set it to 'unparseable', Zod will fail.
+    // 'unparseable' is not JSON, so the override stays a string and Zod
+    // rejects it where a number is required.
     await expect(loadConfig()).rejects.toBeInstanceOf(ConfigError);
     delete process.env.FORGE_NEWKEY__NESTED__VALUE;
     delete process.env.FORGE_NEWKEY__OTHER;
@@ -136,8 +137,8 @@ describe('loadConfig', () => {
   });
 
   it('getConfig throws if called before loadConfig', async () => {
-    // Cannot easily use require in ESM context so dynamically import a fresh one
-    // by appending a query string.
+    // ESM has no require cache to clear, so force a fresh module instance
+    // by appending a query string to the specifier.
     const { getConfig: freshGetConfig } = await import('../../src/utils/config.js?cachebust=' + Date.now());
     expect(() => freshGetConfig()).toThrow(ConfigError);
   });

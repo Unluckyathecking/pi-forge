@@ -6,7 +6,7 @@ import { execSync } from 'node:child_process';
 import { GitCliAdapter } from '../../src/adapters/git.js';
 import { GitError } from '../../src/core/errors.js';
 
-describe('GitCliAdapter — Phase 2 ref + worktree helpers', () => {
+describe('GitCliAdapter — ref + worktree helpers', () => {
   let repoRoot: string;
   let adapter: GitCliAdapter;
 
