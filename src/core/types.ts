@@ -288,20 +288,18 @@ export interface ForgeConfig {
      * When true, the failure path of executeTaskInternal skips
      * destroyWorktree() so operators can inspect the dirty worktree
      * for diagnosis or salvage. Overridable from the CLI via
-     * --keep-on-fail. Default false (preserve existing behaviour).
+     * --keep-on-fail. Default false.
      */
     readonly preserve_worktree_on_failure: boolean;
     /**
      * What to do with a worktree whose task failed gates.
-     *   - "purge": destroy worktree and branch (legacy default for backward compat
-     *     when preserve_worktree_on_failure is false)
+     *   - "purge": destroy worktree and branch. The default.
      *   - "preserve": auto-commit dirty state, tag at refs/forge/failed/<g>/<t>,
      *     rename worktree to <path><suffix>, write sidecar marker. Operator
      *     can inspect/salvage with `pi-forge inspect` / `pi-forge salvage`.
      *   - "tag-and-purge": tag the dirty SHA but destroy the worktree
      *     (lightweight; tag survives for later `git checkout`).
-     * Default "purge" preserves v1.2.x behaviour. Setting
-     * preserve_worktree_on_failure: true is shorthand for "preserve".
+     * Setting preserve_worktree_on_failure: true is shorthand for "preserve".
      */
     readonly failed_task_behavior: 'purge' | 'preserve' | 'tag-and-purge';
     /**
@@ -392,7 +390,7 @@ export interface ForgeConfig {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Failed-task markers (Phase 2 preservation)
+// Failed-task markers
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**

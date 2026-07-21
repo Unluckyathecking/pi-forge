@@ -1,35 +1,30 @@
 name: release
 
+# Builds and packs a release tarball on version tags. This does NOT publish to
+# npm: the registry name "pi-forge" belongs to an unrelated package, so a
+# publish from here could never ship this project. If npm distribution is ever
+# wanted, pick a scoped name first and restore a publish step against it.
+
 on:
   push:
     tags:
       - 'v*.*.*'
   workflow_dispatch:
-    inputs:
-      dry_run:
-        description: 'Run npm publish in --dry-run mode'
-        required: false
-        default: 'true'
-        type: choice
-        options:
-          - 'true'
-          - 'false'
+
+permissions:
+  contents: read
 
 jobs:
-  publish:
-    name: build and publish
+  package:
+    name: build and package
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22.x'
-          registry-url: 'https://registry.npmjs.org'
           cache: npm
 
       - name: Install
@@ -47,7 +42,6 @@ jobs:
       - name: Verify dist contents
         run: |
           test -f dist/cli/index.js
-          test -f dist/index.js || true
           test -f dist/core/orchestrator.js
 
       - name: Verify tag matches package.json version
@@ -60,12 +54,12 @@ jobs:
             exit 1
           fi
 
-      - name: Publish (dry-run)
-        if: github.event_name == 'workflow_dispatch' && inputs.dry_run == 'true'
-        run: npm publish --dry-run --access public
+      - name: Pack
+        run: npm pack
 
-      - name: Publish (real)
-        if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && inputs.dry_run == 'false')
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --provenance --access public
+      - name: Upload tarball
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: package-tarball
+          path: pi-forge-*.tgz
+          retention-days: 30
