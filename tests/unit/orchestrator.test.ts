@@ -461,9 +461,9 @@ describe('ForgeOrchestrator', () => {
 
   it('executeTaskInternal persists proof artifact even when gates fail', async () => {
     // Planner mock makes a task with required gate `lint`. A mixed
-    // pass/fail set means allRequiredPass is false, so we hit the
-    // failure branch — the regression we are fixing was that the
-    // artifact built in that branch was never persisted.
+    // pass/fail set means allRequiredPass is false, so this exercises
+    // the failure branch, where the artifact used to be built and then
+    // dropped instead of persisted.
     const git = makeMockGit();
     const state = makeMockState();
     const planner = makeMockPlanner();
@@ -758,7 +758,6 @@ describe('ForgeOrchestrator', () => {
 
       await orch.executeGoal('Ship feature');
 
-      // Assert both marker files were written with content '*\n'
       const eslintIgnore = await readFile(join(tmp, '.eslintignore'), 'utf-8');
       const gitIgnore = await readFile(join(tmp, '.gitignore'), 'utf-8');
       expect(eslintIgnore).toBe('*\n');
@@ -768,9 +767,7 @@ describe('ForgeOrchestrator', () => {
     }
   });
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // Phase 5: hook system
-  // ──────────────────────────────────────────────────────────────────────────
+  // ── hook system ──
 
   it('on_task_failed hook is invoked with correct env vars when gates fail', async () => {
     // Use a real temp dir; the hook writes its env to a sentinel file we

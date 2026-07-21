@@ -281,7 +281,6 @@ function makeGoalLedger(
 describe('renderGoalStats', () => {
   let workdir: string;
   let adapter: FilesystemStateAdapter;
-  // We spy on console.log; preserve and restore the real implementation.
   let logSpy: ReturnType<typeof jest.spyOn>;
 
   beforeEach(async () => {
