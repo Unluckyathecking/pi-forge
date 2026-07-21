@@ -1,10 +1,8 @@
 {
   "name": "pi-forge",
   "version": "1.7.0",
-  "description": "Pi Forge — Proof-carrying, hexagonal-core, multi-level autonomous coding factory",
+  "description": "Proof-carrying autonomous coding harness that runs each task in an isolated git worktree behind mechanical lint, typecheck, test, and build gates.",
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
   "pi": {
     "extensions": [
       "./extensions/pi-forge.ts"
@@ -85,6 +83,10 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Unluckyathecking/pi-forge.git"
+    "url": "git+https://github.com/Unluckyathecking/pi-forge.git"
+  },
+  "homepage": "https://github.com/Unluckyathecking/pi-forge#readme",
+  "bugs": {
+    "url": "https://github.com/Unluckyathecking/pi-forge/issues"
   }
 }
