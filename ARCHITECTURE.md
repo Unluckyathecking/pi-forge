@@ -1,19 +1,14 @@
-# Pi Forge: Production-Grade Autonomous Coding Harness
+# Pi Forge architecture
 
-> **Version:** 1.0.0  
-> **Codename:** Forge  
-> **Classification:** Production Harness Architecture  
-> **Synthesized From:** Killed Planner Recovery + 30-Agent Swarm Designs  
-> **Target:** Autonomous, clean, efficient, production-ready code and applications  
-> **Pi Compatibility:** v0.75.5+
+> The design reference for Pi Forge. The current release version lives in
+> `package.json`; Pi compatibility is `@mariozechner/pi-coding-agent >= 0.73.0`
+> (see `peerDependencies`).
 
 ---
 
 ## 1. Philosophy: Forge, Don't Guess
 
 Pi Forge treats software development as a **deterministic industrial process**, not a creative guessing game. Every line of code is forged through specification, proof, verification, and promotion. Nothing reaches production unverified. Nothing is implemented without a contract.
-
-This architecture is the synthesis of a killed planner's vision (recovered from `docs/2026-05-23/killed-planner-architectures.md`) and 30 swarm architecture designs. The killed planner reached for a proof-carrying, git-isolated, multi-agent coding factory. Pi Forge realizes that vision with concrete schemas, roles, and tooling.
 
 ### 1.1 Core Invariants
 
@@ -68,7 +63,7 @@ User Goal
          │
          ▼
 ┌─────────────────────────────────────────────────────────┐
-│              PARALLEL WORKTREE EXECUTION                 │
+│              ISOLATED WORKTREE EXECUTION                 │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐              │
 │  │Worktree A│  │Worktree B│  │Worktree C│              │
 │  │ Coder    │  │ QA       │  │ Reviewer │              │
@@ -124,9 +119,8 @@ The orchestrator core has **zero direct dependencies** on specific tools, models
               │  PlannerPort                │
               │  WorkerPort                 │
               │  VerifierPort               │
-              │  EvidencePort               │
+              │  StatePort                  │
               │  GitPort                    │
-              │  ModelPort                  │
               └─────────────┬───────────────┘
                             │
                             ▼
@@ -168,7 +162,7 @@ Every task is classified into one of four levels. Each level owns a different gr
 
 ## 4. Proof-Carrying Pipeline (MVP Spine)
 
-The killed planner's strongest preference was proof-carrying work: agents should not merely claim success; they should attach proof artifacts.
+The strongest design preference here is proof-carrying work: agents should not merely claim success; they should attach proof artifacts.
 
 ### 4.1 Pipeline Flow
 
@@ -184,7 +178,7 @@ Task Decomposer
 
 ### 4.2 Proof Artifact Schema
 
-See [`schemas/proof-artifact.json`](./schemas/proof-artifact.json). Every proof artifact contains:
+The shape is specified in [`schemas/proof-artifact.json`](./schemas/proof-artifact.json). Every proof artifact contains:
 
 - **Claims**: A list of gate results (lint, typecheck, test, build, security_scan, etc.)
 - **Command executed, exit code, output excerpt**
@@ -193,15 +187,17 @@ See [`schemas/proof-artifact.json`](./schemas/proof-artifact.json). Every proof 
 
 ### 4.3 Baseline Gates
 
-| Gate | Command Example | Blocking |
-|------|-----------------|----------|
-| **Lint** | `eslint src/` | Yes |
-| **Typecheck** | `tsc --noEmit` | Yes |
-| **Test** | `npm test` | Yes |
-| **Build** | `npm run build` | Yes |
-| **Security Scan** | `secret-scan`, `dependency-audit` | Yes (critical only) |
-| **Contract Verify** | Compare impl against frozen contracts | Yes |
-| **Diff Review** | Pattern scan for suspicious changes | Advisory |
+Gate commands are resolved from the target repository's `package.json` scripts by `LocalCommandVerifier`, with compile-time fallbacks:
+
+| Gate | Command | Blocking |
+|------|---------|----------|
+| **Lint** | `npm run lint` if the script exists, else `eslint .` | Yes |
+| **Typecheck** | `npm run typecheck` if the script exists, else `tsc --noEmit` | Yes |
+| **Test** | `npm test` (a no-op test script is reported as `skip`, not `pass`) | Yes |
+| **Build** | `npm run build` if the script exists | Yes |
+| **Security Scan** | Placeholder command today; the diff pattern scan in risk scoring carries the real signal | Configured blocking |
+| **Contract Verify** | Placeholder command (advisory in `config.yaml`) | No |
+| **Diff Review** | Suspicious-pattern scan, folded into risk scoring | Advisory |
 
 The reviewer focuses on **design, edge cases, maintainability, and product fit**. It does not spend its budget checking things that a deterministic command can check.
 
@@ -223,7 +219,7 @@ Each role operates under explicit contracts:
 | **Planner** | Task graphs, contracts, proof requirements | `draft_contract`, `freeze_contract`, `impact_analysis` | [`roles/planner.md`](./roles/planner.md) |
 | **Coder** | Implementation in isolated worktrees | `write_code`, `run_tests`, `proof_artifact_create` | [`roles/coder.md`](./roles/coder.md) |
 | **Reviewer** | Adversarial design and correctness review | `diff_review`, `risk_score`, `block_promote` | [`roles/reviewer.md`](./roles/reviewer.md) |
-| **QA** | Tests, reproduction, user flow verification | `test.unit`, `test.integration`, `test.e2e` | *(uses Coder + Reviewer tools)* |
+| **QA** | Tests, reproduction, user flow verification | `test.unit`, `test.integration`, `test.e2e` | [`roles/qa.md`](./roles/qa.md) |
 | **Security** | Secrets, trust boundaries, injection, dependencies | `security_scan`, `dependency_audit`, `block_promote` | [`roles/security.md`](./roles/security.md) |
 | **Integrator** | Merge, conflict resolution, integration tests | `worktree_merge`, `resolve_conflict`, `contract_verify` | [`roles/integrator.md`](./roles/integrator.md) |
 
@@ -275,6 +271,10 @@ State is first-class, not hidden in chat transcripts.
 | **Evidence Ledger** | [`schemas/evidence-ledger.json`](./schemas/evidence-ledger.json) | Complete audit log of actions and decisions |
 | **State Checkpoint** | [`schemas/state-checkpoint.json`](./schemas/state-checkpoint.json) | Recovery point for resuming interrupted sessions |
 
+The schemas are the published specification for these shapes and ship in
+the npm package. The adapters construct and parse the files directly;
+nothing loads the schemas for runtime validation.
+
 ### 7.2 State Paths
 
 ```
@@ -284,12 +284,9 @@ State is first-class, not hidden in chat transcripts.
 │   ├── evidence/{goal_id}/ledger.json
 │   ├── evidence/{goal_id}/proofs/{artifact_id}.json
 │   ├── checkpoints/{checkpoint_id}.json
-│   ├── decisions/{goal_id}.json
-│   └── memory/project-conventions.json
-├── contracts/
-│   └── v{N}/ ...
+│   └── failed-tasks/{task_id}.json
 └── worktrees/
-    └── {task_id}/ ...
+    └── {goal_id}/{task_id}/ ...
 ```
 
 ### 7.3 Recovery Checkpoints
@@ -299,7 +296,7 @@ Every long-running agent writes a checkpoint before:
 - Starting destructive operations
 - Any operation expected to take >5 minutes
 
-The killed planner's most important lesson: **every planner or subagent needs a hard write checkpoint before doing more research.**
+The rule behind this: **every planner or subagent needs a hard write checkpoint before doing more research.**
 
 ---
 
@@ -321,19 +318,27 @@ Subagent Output
 
 ### 8.2 Risk Scoring
 
-| Component | Weight | Source |
-|-----------|--------|--------|
-| Policy violations | 0.30 | Security scan, protected files |
-| Suspicious patterns | 0.25 | Diff scan, deny patterns |
-| Test failures | 0.20 | Test gate results |
-| Contract drift | 0.15 | Contract verification |
-| Diff size anomaly | 0.10 | Lines changed vs. estimate |
+The implemented score (`LocalCommandVerifier.scoreRisk`) is the sum of
+three components, capped at 100:
 
-**Thresholds:**
-- **0–25**: Auto-promote
-- **26–50**: User confirm
-- **51–75**: Security review required
-- **76–100**: Auto-deny
+| Component | Contribution | Source |
+|-----------|--------------|--------|
+| Suspicious patterns | 8 per match, capped at 40 | Diff scan for `eval(`, `Function(`, `child_process`, `exec(`, `password`, `secret`, `token`, `private_key` |
+| Test failures | 25 when the test gate failed | Test gate result |
+| Diff size | Scaled against built-in limits (500 lines, 20 files), capped at 40 | `git diff --stat` |
+
+**Decision thresholds:**
+- **0–19**: `auto_promote`
+- **20–49**: `user_confirm`
+- **50–79**: `security_review`
+- **80–100**: `auto_deny`
+
+The orchestrator hard-stops a task on `auto_deny`; the intermediate
+decisions are recorded in the proof artifact and evidence ledger for the
+operator. `config.yaml` also declares a weighted risk model (policy
+violations, contract drift, and friends); the implementation does not
+read those weights yet, so treat them as design intent rather than
+behavior.
 
 ---
 
@@ -341,38 +346,38 @@ Subagent Output
 
 Pi Forge starts with the Proof-Carrying Pipeline as its spine. Additional architectures attach as modules.
 
-### Variant 1: Proof-Carrying Code (ENABLED — MVP Spine)
+### Variant 1: Proof-Carrying Code (implemented — MVP spine)
 Every task includes proof requirements before implementation. The coding agent produces both code and evidence. A mechanical verifier checks evidence before review.
 
 **Best for:** All tasks. This is the baseline.
 
-### Variant 2: Speculative Execution (DISABLED — v2)
+### Variant 2: Speculative Execution (not implemented — planned v2)
 For ambiguous tasks, launch multiple independent strategies in parallel worktrees. Kill or pause losing branches early when evidence shows they are slower, riskier, or drifting.
 
 **Best for:** UI implementation with several possible designs, bug fixes with uncertain root cause, performance optimization.
 
 **Early-kill signals:** Failing tests with no progress, growing diff without evidence, incompatible architectural direction, tool-call exhaustion.
 
-### Variant 3: Capability-Based Composition (DISABLED — v2)
+### Variant 3: Capability-Based Composition (not implemented — planned v2)
 Instead of fixed role names, route tasks to agents based on declared capabilities (`typescript.refactor`, `react.ui`, `security.review`).
 
 **Best for:** Heterogeneous agent pools, multiple model backends, long-running systems that learn which agent is good at what.
 
-### Variant 4: Competitive Co-Evolution (DISABLED — v2)
+### Variant 4: Competitive Co-Evolution (not implemented — planned v2)
 Use adversarial pairs: builder vs. breaker. One agent builds, another tries to exploit or invalidate.
 
 **Best for:** Security-sensitive code, API boundary hardening, test quality improvement.
 
 **Policy:** Opt-in only. Costs more tokens and time.
 
-### Variant 5: Self-Modifying Harness (DISABLED — production)
+### Variant 5: Self-Modifying Harness (not implemented — planned later)
 The harness learns from completed runs and proposes improvements to its own prompts, policies, routing, and templates.
 
 **Best for:** Long-running projects, repeated task types, reducing recurring failures.
 
 **Safety rule:** The harness may propose changes but must not silently rewrite control policies. Self-modification goes through evidence, review, and rollback just like product code.
 
-### Variant 6: Constraint-Satisfaction (DISABLED — production)
+### Variant 6: Constraint-Satisfaction (not implemented — planned later)
 Represent the requested system as constraints, then search for an implementation plan that satisfies them.
 
 **Best for:** Complex interdependent tasks, large refactors, multi-module changes.
@@ -395,15 +400,13 @@ The system pauses before:
 
 ## 11. Configuration
 
-See [`config.yaml`](./config.yaml) for all tunable parameters and [`pi.json`](./pi.json) for the Pi extension manifest.
+See [`config.yaml`](./config.yaml) for all tunable parameters. The Pi extension manifest is the `pi` field in [`package.json`](./package.json).
 
 ---
 
 ## 12. Build Order
 
-The killed planner's recommended build order, preserved:
-
-1. **Build Proof-Carrying Code Pipeline first.** (DONE — this architecture)
+1. **Build Proof-Carrying Code Pipeline first.** (done — this is the shipped spine)
 2. Add Speculative Execution for uncertain tasks.
 3. Add Capability-Based Agent Composition as the agent pool grows.
 4. Add Competitive Co-Evolution for security-critical or high-risk work.
@@ -427,9 +430,12 @@ The killed planner's recommended build order, preserved:
 
 ## 14. MVP Success Criteria
 
-- [ ] A user goal can be decomposed into tasks.
-- [ ] At least two independent tasks can run in separate worktrees.
-- [ ] Each task produces a commit and evidence.
-- [ ] Failed tasks stop with a clear reason.
-- [ ] Passing tasks can be merged into a session branch.
-- [ ] The final report names what changed, what passed, and what remains risky.
+All met as of the 1.x releases; see `CHANGELOG.md` for the version each
+landed in.
+
+- [x] A user goal can be decomposed into tasks.
+- [x] At least two independent tasks can run in separate worktrees.
+- [x] Each task produces a commit and evidence.
+- [x] Failed tasks stop with a clear reason.
+- [x] Passing tasks can be merged into a session branch.
+- [x] The final report names what changed, what passed, and what remains risky.

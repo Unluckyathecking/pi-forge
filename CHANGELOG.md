@@ -404,7 +404,7 @@ If none resolve, `worker.init()` still completes (the provider is
 registered without auth) but the first `execute()` call will throw at
 prompt time with a meaningful upstream error.
 
-
+## [1.1.0] — 2026-05-24
 
 ### Added
 
@@ -476,7 +476,7 @@ prompt time with a meaningful upstream error.
   `~/.pi/agent/auth.json` (managed via `pi auth`).
 - Private `isDirty` helper duplicated by the new public method.
 
-## [1.0.0] — 2025-11-15
+## [1.0.0] — 2026-05-23
 
 Initial release. Proof-carrying, hexagonal-core, multi-level coding harness
 with task DAG, evidence ledger, mechanical gates, and Pi Coding Agent
