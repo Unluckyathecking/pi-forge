@@ -298,7 +298,9 @@ implemented today.
    heading and bump `version` in `package.json`.
 2. `git tag v<version> && git push --tags`.
 3. The release workflow re-runs the quality gates, checks that the tag
-   matches `package.json`, and publishes with npm provenance.
+   matches `package.json`, and attaches the packed tarball to the run
+   as an artifact. Nothing is published to the npm registry; the
+   `pi-forge` name there belongs to an unrelated package.
 
 ## Contributing
 

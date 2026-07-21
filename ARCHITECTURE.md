@@ -63,7 +63,7 @@ User Goal
          │
          ▼
 ┌─────────────────────────────────────────────────────────┐
-│              PARALLEL WORKTREE EXECUTION                 │
+│              ISOLATED WORKTREE EXECUTION                 │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐              │
 │  │Worktree A│  │Worktree B│  │Worktree C│              │
 │  │ Coder    │  │ QA       │  │ Reviewer │              │
@@ -162,7 +162,7 @@ Every task is classified into one of four levels. Each level owns a different gr
 
 ## 4. Proof-Carrying Pipeline (MVP Spine)
 
-The killed planner's strongest preference was proof-carrying work: agents should not merely claim success; they should attach proof artifacts.
+The strongest design preference here is proof-carrying work: agents should not merely claim success; they should attach proof artifacts.
 
 ### 4.1 Pipeline Flow
 
