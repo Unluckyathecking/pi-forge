@@ -1,47 +1,52 @@
-# Security Policy
+# Security policy
 
 ## Reporting a vulnerability
 
-Open a private security advisory on GitHub or email the maintainer. Do not
-file public issues for security problems.
+Report vulnerabilities privately through GitHub: open the Security tab
+and choose "Report a vulnerability", or go directly to
+<https://github.com/Unluckyathecking/pi-forge/security/advisories/new>.
+Do not file public issues or discuss details in pull requests before a
+fix ships.
 
-## Authentication boundary
+Include the version or commit, what an attacker gains, and reproduction
+steps. This is a single-maintainer project: reports are read and fixes
+are coordinated through the advisory, but there are no guaranteed
+response times.
 
-Pi Forge **never owns LLM API keys**. All authentication flows through Pi
-Coding Agent (`~/.pi/agent/auth.json`, managed by `pi auth login
-kimi-coder`). Pi Forge invokes the Pi SDK in-process; tokens are scoped to
-the user's Pi configuration and are not read from project-local `.env`
-files. If you find a `FORGE_MODEL__KIMI_API_KEY` or similar in a fork or
-template, it is stale — delete it and rotate the key.
+## Supported versions
 
-## Worker isolation
+Fixes land on `main`. There are no maintained release branches; run the
+latest release or `main` to pick up security fixes.
 
-The `PiSdkWorkerAdapter` spawns a Pi `AgentSession` inside an isolated git
-worktree (`.pi/worktrees/<goal>/<task>`). The worker is launched with a
-restricted tool allowlist:
+## Scope
 
-```text
-read, edit, write, grep, ls
-```
+The reports most useful here:
 
-`bash` is intentionally withheld so the worker cannot execute arbitrary
-shell commands. Gates run after the worker finishes and have their own
-controlled command surface.
+- Command execution. Gate commands are resolved from the target
+  repository's `package.json` scripts in `src/adapters/verifier.ts`,
+  and git is invoked through `src/adapters/git.ts`. Anything that lets
+  a goal string, task id, or repository content inject into those
+  commands is a vulnerability.
+- Worktree isolation. Tasks run in `.pi/worktrees/<goal>/<task>`, and
+  state ids are validated against `[A-Za-z0-9_.-]` in
+  `src/adapters/state.ts`. An escape from either boundary counts.
+- API key handling. Keys pass through `src/cli` and
+  `src/adapters/worker.ts`, and are stripped from the environment of
+  spawned subprocesses (`scrubbedEnv` in `src/adapters/git.ts`). A key
+  leaking into gate output, evidence files, or a child process counts.
 
-## Gate command surface
+A hostile `config.yaml` is out of scope: the configuration file is
+trusted operator input.
 
-`LocalCommandVerifier` resolves gate commands from `package.json` scripts
-or falls back to compile-time literals (`eslint .`, `tsc --noEmit`, etc.).
-User-supplied input never reaches the shell. Custom gates added via
-`config.yaml` should be treated as trusted.
+## Notes for reporters
 
-## Secret handling
-
-- `.env` and `.env.*` are gitignored.
-- Evidence ledgers truncate command output to 500 characters per gate
-  claim by default, configurable via
-  `proof_carrying.artifact.max_output_excerpt_length`. Configure your
-  secret scan gate to keep secret material out of evidence files.
-- Risk scoring scans the diff for patterns including `password`, `secret`,
-  `token`, `private_key`, `eval(`, `Function(`. A hit raises the risk
-  score and can flip the decision to `security_review` or `auto_deny`.
+- The worker agent runs with a restricted tool allowlist (`read`,
+  `edit`, `write`, `grep`, `ls`); `bash` is deliberately withheld so
+  the worker cannot execute arbitrary shell commands.
+- Evidence ledgers truncate gate output excerpts
+  (`proof_carrying.artifact.max_output_excerpt_length`, default 2000
+  characters). A secret that survives into evidence files is worth a
+  report.
+- Risk scoring scans diffs for patterns including `password`, `secret`,
+  `token`, `private_key`, `eval(`, and `Function(`, and can flip a task
+  to `security_review` or `auto_deny`.
