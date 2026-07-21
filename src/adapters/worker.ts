@@ -162,9 +162,8 @@ export class PiSdkWorkerAdapter implements WorkerPort {
     assertSafeIdentifier(this.modelId, 'modelId');
 
     // Load the SDK module as `unknown` so the structural guard below is the
-    // single source of truth — the previous upfront `as PiSdkModule` cast
-    // silenced TypeScript before any runtime check, which made the guard
-    // confusing to reason about under SDK version skew.
+    // single source of truth. Casting to PiSdkModule up front would silence
+    // TypeScript before any runtime check, hiding SDK version skew.
     let mod: unknown;
     try {
       // Non-literal specifier so bundlers don't try to resolve the optional
